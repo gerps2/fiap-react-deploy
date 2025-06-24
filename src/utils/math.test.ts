@@ -1,4 +1,4 @@
-import { add, subtract, multiply, divide, isEven, isPositive, factorial, clamp } from './math';
+import { add, subtract, multiply } from './math';
 
 describe('Math Utilities', () => {
   describe('add', () => {
