@@ -1,4 +1,4 @@
-name: �� Deploy Development (with Retry)
+name: 🚀 Deploy Development (with Docker Hub)
 
 on:
   push:
@@ -11,8 +11,8 @@ on:
 env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'dev'
-  REGISTRY_URL: 'registry-prod.gerson-prudencio.com.br'
-  IMAGE_NAME: 'fiap-react-deploy'
+  REGISTRY_URL: 'docker.io'
+  IMAGE_NAME: 'gprudencio1/fiap-react-deploy'
 
 jobs:
   # Job 1: Validação rápida antes do deploy
@@ -39,12 +39,12 @@ jobs:
         env:
           CI: true
 
-  # Job 2: Build e Push para Registry de Desenvolvimento com Retry
+  # Job 2: Build e Push para Docker Hub
   build-dev:
-    name: 🔨 Build & Push Development (with Retry)
+    name: 🔨 Build & Push Development (Docker Hub)
     runs-on: ubuntu-latest
     needs: pre-deploy
-    timeout-minutes: 20
+    timeout-minutes: 15
     
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
@@ -57,36 +57,17 @@ jobs:
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🔑 Login to Development Registry (with Retry)
-        run: |
-          echo "🔑 Attempting login to registry with retry logic..."
-          
-          MAX_ATTEMPTS=5
-          DELAY=10
-          
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Login attempt $i/$MAX_ATTEMPTS..."
-            
-            if echo "${{ secrets.PROD_REGISTRY_PASSWORD }}" | docker login ${{ env.REGISTRY_URL }} -u ${{ secrets.PROD_REGISTRY_USER }} --password-stdin; then
-              echo "✅ Login successful on attempt $i"
-              break
-            else
-              echo "❌ Login failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All login attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-              DELAY=$((DELAY * 2))  # Exponential backoff
-            fi
-          done
+      - name: 🔑 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: 🏷️ Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=sha,prefix=dev-{{date 'YYYYMMDD'}}-
@@ -96,152 +77,76 @@ jobs:
             org.opencontainers.image.description=Status App React - Development Environment
             org.opencontainers.image.vendor=FIAP
 
-      - name: 🔨 Build and Push Development Image (with Retry)
+      - name: 🔨 Build and Push Development Image
         id: build
-        run: |
-          echo "🔨 Building and pushing image with retry logic..."
-          
-          MAX_ATTEMPTS=3
-          DELAY=30
-          
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Build & Push attempt $i/$MAX_ATTEMPTS..."
-            
-            if docker buildx build \
-              --context . \
-              --push \
-              --platform linux/amd64,linux/arm64 \
-              --tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest \
-              --tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-$(date +%Y%m%d)-${{ github.sha }} \
-              --tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:develop \
-              --label "org.opencontainers.image.title=FIAP React Deploy - Development" \
-              --label "org.opencontainers.image.description=Status App React - Development Environment" \
-              --label "org.opencontainers.image.vendor=FIAP" \
-              --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')" \
-              --build-arg VITE_ENVIRONMENT=dev \
-              --build-arg VITE_APP_VERSION=dev-${{ github.sha }} \
-              --build-arg VITE_BUILD_TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%S.000Z') \
-              --build-arg VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID_DEV }} \
-              --build-arg VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy-dev \
-              --build-arg VITE_DEBUG=true \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max; then
-              
-              echo "✅ Build & Push successful on attempt $i"
-              echo "digest=$(docker buildx imagetools inspect ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest --format '{{.Manifest.Digest}}')" >> $GITHUB_OUTPUT
-              break
-            else
-              echo "❌ Build & Push failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All build attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-              DELAY=$((DELAY + 15))  # Linear backoff increase
-            fi
-          done
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_ENVIRONMENT=dev
+            VITE_APP_VERSION=dev-${{ github.sha }}
+            VITE_BUILD_TIMESTAMP=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID_DEV }}
+            VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy-dev
+            VITE_DEBUG=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: 📊 Image Summary
         run: |
           echo "## 🐳 Development Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📋 Image Details:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
           echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Main Tag**: dev-latest" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch Tag**: develop" >> $GITHUB_STEP_SUMMARY
-          echo "- **Date Tag**: dev-$(date +%Y%m%d)-${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags**: " >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
 
-  # Job 3: Test da imagem no registry com Retry
+  # Job 3: Test da imagem no Docker Hub
   test-image:
-    name: 🧪 Test Registry Image (with Retry)
+    name: 🧪 Test Docker Hub Image
     runs-on: ubuntu-latest
     needs: build-dev
-    timeout-minutes: 15
+    timeout-minutes: 10
     
     steps:
-      - name: 🔑 Login to Development Registry (with Retry)
+      - name: 🏥 Test Development Container from Docker Hub
         run: |
-          echo "🔑 Attempting login to registry for testing..."
+          echo "🚀 Pulling and testing image from Docker Hub..."
           
-          MAX_ATTEMPTS=3
-          DELAY=10
+          # Pull da imagem do Docker Hub (público, não precisa login)
+          docker pull ${{ env.IMAGE_NAME }}:dev-latest
           
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Login attempt $i/$MAX_ATTEMPTS..."
-            
-            if echo "${{ secrets.PROD_REGISTRY_PASSWORD }}" | docker login ${{ env.REGISTRY_URL }} -u ${{ secrets.PROD_REGISTRY_USER }} --password-stdin; then
-              echo "✅ Login successful on attempt $i"
-              break
-            else
-              echo "❌ Login failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All login attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-            fi
-          done
-
-      - name: 🏥 Test Development Container from Registry (with Retry)
-        run: |
-          echo "🚀 Testing image from registry with retry logic..."
+          # Start container
+          docker run -d --name dev-test-container -p 8081:8080 \
+            -e NODE_ENV=development \
+            -e ENVIRONMENT=dev \
+            -e DEBUG=true \
+            ${{ env.IMAGE_NAME }}:dev-latest
           
-          MAX_ATTEMPTS=3
-          DELAY=20
+          echo "⏳ Waiting for container to be ready..."
+          sleep 30
           
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Test attempt $i/$MAX_ATTEMPTS..."
-            
-            # Cleanup any existing container
-            docker rm -f dev-test-container 2>/dev/null || true
-            
-            # Pull and test
-            if docker pull ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest && \
-               docker run -d --name dev-test-container -p 8081:8080 \
-                 -e NODE_ENV=development \
-                 -e ENVIRONMENT=dev \
-                 -e DEBUG=true \
-                 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest; then
-              
-              echo "⏳ Waiting for container to be ready..."
-              sleep 30
-              
-              # Test endpoints with retry
-              if curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8081/health && \
-                 curl -f --retry 3 --retry-delay 5 --retry-connrefused http://localhost:8081/api/info && \
-                 curl -f --retry 3 --retry-delay 5 --retry-connrefused http://localhost:8081/; then
-                
-                echo "✅ Registry image tests passed on attempt $i"
-                docker stop dev-test-container
-                docker rm dev-test-container
-                break
-              else
-                echo "❌ Container tests failed on attempt $i"
-                docker logs dev-test-container || true
-                docker stop dev-test-container 2>/dev/null || true
-                docker rm dev-test-container 2>/dev/null || true
-                
-                if [ $i -eq $MAX_ATTEMPTS ]; then
-                  echo "🚨 All test attempts failed!"
-                  exit 1
-                fi
-                echo "⏳ Waiting ${DELAY}s before retry..."
-                sleep $DELAY
-              fi
-            else
-              echo "❌ Pull or container start failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All test attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-            fi
-          done
+          echo "🔍 Testing health check endpoint..."
+          curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8081/health || exit 1
+          
+          echo "🔍 Testing API info endpoint..."
+          curl -f --retry 3 --retry-delay 5 --retry-connrefused http://localhost:8081/api/info || exit 1
+          
+          echo "🔍 Testing main application..."
+          curl -f --retry 3 --retry-delay 5 --retry-connrefused http://localhost:8081/ || exit 1
+          
+          echo "🛑 Stopping test container..."
+          docker stop dev-test-container
+          docker rm dev-test-container
+          
+          echo "✅ Docker Hub image tests passed!"
 
   # Job 4: Deploy para Coolify (Desenvolvimento)
   deploy-dev:
@@ -255,45 +160,27 @@ jobs:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      - name: 🚀 Deploy to Coolify Development (with Retry)
+      - name: 🚀 Deploy to Coolify Development
         run: |
           echo "🚀 Triggering Coolify deployment for development..."
           
           if [ -n "${{ secrets.COOLIFY_WEBHOOK_DEV }}" ]; then
-            MAX_ATTEMPTS=3
-            DELAY=15
-            
-            for i in $(seq 1 $MAX_ATTEMPTS); do
-              echo "🔄 Deploy attempt $i/$MAX_ATTEMPTS..."
-              
-              if curl -X POST "${{ secrets.COOLIFY_WEBHOOK_DEV }}" \
-                -H "Content-Type: application/json" \
-                -d '{
-                  "branch": "develop",
-                  "commit": "${{ github.sha }}",
-                  "environment": "development",
-                  "registry_url": "${{ env.REGISTRY_URL }}",
-                  "image_name": "${{ env.IMAGE_NAME }}",
-                  "image_tag": "dev-latest",
-                  "full_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest",
-                  "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
-                  "triggered_by": "${{ github.actor }}"
-                }' \
-                --max-time 30 \
-                --retry 2; then
-                
-                echo "✅ Development deployment triggered successfully on attempt $i"
-                break
-              else
-                echo "❌ Deployment trigger failed on attempt $i"
-                if [ $i -eq $MAX_ATTEMPTS ]; then
-                  echo "🚨 All deployment attempts failed!"
-                  exit 1
-                fi
-                echo "⏳ Waiting ${DELAY}s before retry..."
-                sleep $DELAY
-              fi
-            done
+            curl -X POST "${{ secrets.COOLIFY_WEBHOOK_DEV }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "branch": "develop",
+                "commit": "${{ github.sha }}",
+                "environment": "development",
+                "registry_url": "docker.io",
+                "image_name": "${{ env.IMAGE_NAME }}",
+                "image_tag": "dev-latest",
+                "full_image": "${{ env.IMAGE_NAME }}:dev-latest",
+                "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
+                "triggered_by": "${{ github.actor }}"
+              }' \
+              --max-time 30 \
+              --retry 3
+            echo "✅ Development deployment triggered!"
           else
             echo "⚠️ COOLIFY_WEBHOOK_DEV not configured, skipping deployment trigger"
           fi
@@ -307,8 +194,8 @@ jobs:
           echo "- **Environment**: Development" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: develop" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.IMAGE_NAME }}:dev-latest" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -323,16 +210,16 @@ jobs:
             echo "🚨 **Development deployment failed!**" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Job 5: Smoke Tests no ambiente deployado com Retry
+  # Job 5: Smoke Tests no ambiente deployado
   smoke-tests:
-    name: 🧪 Smoke Tests (with Retry)
+    name: 🧪 Smoke Tests
     runs-on: ubuntu-latest
     needs: deploy-dev
     if: success()
-    timeout-minutes: 10
+    timeout-minutes: 8
     
     steps:
-      - name: 🧪 Run Smoke Tests (with Retry)
+      - name: 🧪 Run Smoke Tests
         run: |
           echo "🧪 Running smoke tests on development environment..."
           
@@ -340,28 +227,17 @@ jobs:
             echo "⏳ Waiting for deployment to stabilize..."
             sleep 45
             
-            MAX_ATTEMPTS=5
-            DELAY=15
+            # Testar endpoints principais com retry
+            echo "🔍 Testing health check..."
+            curl -f --retry 5 --retry-delay 10 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/health" || exit 1
             
-            for i in $(seq 1 $MAX_ATTEMPTS); do
-              echo "🔄 Smoke test attempt $i/$MAX_ATTEMPTS..."
-              
-              if curl -f --retry 3 --retry-delay 10 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/health" && \
-                 curl -f --retry 3 --retry-delay 5 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/api/info" && \
-                 curl -f --retry 3 --retry-delay 5 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/"; then
-                
-                echo "✅ All smoke tests passed on attempt $i!"
-                break
-              else
-                echo "❌ Smoke tests failed on attempt $i"
-                if [ $i -eq $MAX_ATTEMPTS ]; then
-                  echo "🚨 All smoke test attempts failed!"
-                  exit 1
-                fi
-                echo "⏳ Waiting ${DELAY}s before retry..."
-                sleep $DELAY
-              fi
-            done
+            echo "🔍 Testing API info..."
+            curl -f --retry 3 --retry-delay 5 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/api/info" || exit 1
+            
+            echo "🔍 Testing main application..."
+            curl -f --retry 3 --retry-delay 5 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/" || exit 1
+            
+            echo "✅ All smoke tests passed!"
           else
             echo "⚠️ DEV_DOMAIN not configured, skipping smoke tests"
           fi

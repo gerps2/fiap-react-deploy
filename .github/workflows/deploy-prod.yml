@@ -1,4 +1,4 @@
-name: 🌟 Deploy Production (with Retry)
+name: 🌟 Deploy Production (with Docker Hub)
 
 on:
   push:
@@ -9,8 +9,8 @@ env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'production'
   # Registry configuration
-  REGISTRY_URL: 'registry-prod.gerson-prudencio.com.br'
-  IMAGE_NAME: 'fiap-react-deploy'
+  REGISTRY_URL: 'docker.io'
+  IMAGE_NAME: 'gprudencio1/fiap-react-deploy'
 
 jobs:
   # Job 1: Validação completa antes do deploy de produção
@@ -50,12 +50,12 @@ jobs:
           path: coverage/
           retention-days: 30
 
-  # Job 2: Build e Push para Registry de Produção com Retry
+  # Job 2: Build e Push para Docker Hub
   build-prod:
-    name: 🔨 Build & Push Production (with Retry)
+    name: 🔨 Build & Push Production (Docker Hub)
     runs-on: ubuntu-latest
     needs: pre-deploy
-    timeout-minutes: 25
+    timeout-minutes: 20
     
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -77,36 +77,17 @@ jobs:
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🔑 Login to Production Registry (with Retry)
-        run: |
-          echo "🔑 Attempting login to production registry with retry logic..."
-          
-          MAX_ATTEMPTS=5
-          DELAY=10
-          
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Login attempt $i/$MAX_ATTEMPTS..."
-            
-            if echo "${{ secrets.PROD_REGISTRY_PASSWORD }}" | docker login ${{ env.REGISTRY_URL }} -u ${{ secrets.PROD_REGISTRY_USER }} --password-stdin; then
-              echo "✅ Login successful on attempt $i"
-              break
-            else
-              echo "❌ Login failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All login attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-              DELAY=$((DELAY * 2))  # Exponential backoff
-            fi
-          done
+      - name: 🔑 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: 🏷️ Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -119,71 +100,43 @@ jobs:
             org.opencontainers.image.vendor=FIAP
             org.opencontainers.image.version=${{ steps.version.outputs.VERSION }}
 
-      - name: 🔨 Build and Push Production Image (with Retry)
+      - name: 🔨 Build and Push Production Image
         id: build
-        run: |
-          echo "🔨 Building and pushing production image with retry logic..."
-          
-          MAX_ATTEMPTS=3
-          DELAY=45
-          
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Build & Push attempt $i/$MAX_ATTEMPTS..."
-            
-            if docker buildx build \
-              --context . \
-              --push \
-              --platform linux/amd64,linux/arm64 \
-              --tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest \
-              --tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }} \
-              --tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:$(echo ${{ steps.version.outputs.VERSION }} | cut -d. -f1-2) \
-              --tag ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:$(echo ${{ steps.version.outputs.VERSION }} | cut -d. -f1) \
-              --label "org.opencontainers.image.title=FIAP React Deploy - Production" \
-              --label "org.opencontainers.image.description=Status App React - Production Environment" \
-              --label "org.opencontainers.image.vendor=FIAP" \
-              --label "org.opencontainers.image.version=${{ steps.version.outputs.VERSION }}" \
-              --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')" \
-              --build-arg VITE_ENVIRONMENT=production \
-              --build-arg VITE_APP_VERSION=${{ steps.version.outputs.VERSION }} \
-              --build-arg VITE_BUILD_TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%S.000Z') \
-              --build-arg VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID }} \
-              --build-arg VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max; then
-              
-              echo "✅ Build & Push successful on attempt $i"
-              echo "digest=$(docker buildx imagetools inspect ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest --format '{{.Manifest.Digest}}')" >> $GITHUB_OUTPUT
-              break
-            else
-              echo "❌ Build & Push failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All build attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-              DELAY=$((DELAY + 30))  # Linear backoff increase
-            fi
-          done
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_ENVIRONMENT=production
+            VITE_APP_VERSION=${{ steps.version.outputs.VERSION }}
+            VITE_BUILD_TIMESTAMP=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID }}
+            VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: 📊 Image Summary
         run: |
           echo "## 🐳 Production Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📋 Image Details:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
           echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Latest Tag**: latest" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version Tag**: ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags**: " >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
 
-  # Job 3: Test da imagem no registry com Retry
+  # Job 3: Test da imagem no Docker Hub
   test-image:
-    name: 🧪 Test Registry Image (with Retry)
+    name: 🧪 Test Docker Hub Image
     runs-on: ubuntu-latest
     needs: build-prod
-    timeout-minutes: 20
+    timeout-minutes: 15
     
     steps:
       - name: 🏷️ Get version
@@ -191,101 +144,52 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/}
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
-      - name: 🔑 Login to Production Registry (with Retry)
+      - name: 🏥 Test Production Container from Docker Hub
         run: |
-          echo "🔑 Attempting login to production registry for testing..."
+          echo "🚀 Pulling and testing production image from Docker Hub..."
           
-          MAX_ATTEMPTS=3
-          DELAY=10
+          # Pull da imagem do Docker Hub (público, não precisa login)
+          docker pull ${{ env.IMAGE_NAME }}:latest
           
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Login attempt $i/$MAX_ATTEMPTS..."
-            
-            if echo "${{ secrets.PROD_REGISTRY_PASSWORD }}" | docker login ${{ env.REGISTRY_URL }} -u ${{ secrets.PROD_REGISTRY_USER }} --password-stdin; then
-              echo "✅ Login successful on attempt $i"
-              break
-            else
-              echo "❌ Login failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All login attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-            fi
-          done
-
-      - name: 🏥 Test Production Container from Registry (with Retry)
-        run: |
-          echo "🚀 Testing production image from registry with retry logic..."
+          # Start container
+          docker run -d --name prod-test-container -p 8080:8080 \
+            -e NODE_ENV=production \
+            -e ENVIRONMENT=production \
+            ${{ env.IMAGE_NAME }}:latest
           
-          MAX_ATTEMPTS=3
-          DELAY=30
+          echo "⏳ Waiting for container to be ready..."
+          sleep 40
           
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            echo "🔄 Test attempt $i/$MAX_ATTEMPTS..."
-            
-            # Cleanup any existing container
-            docker rm -f prod-test-container 2>/dev/null || true
-            
-            # Pull and test
-            if docker pull ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest && \
-               docker run -d --name prod-test-container -p 8080:8080 \
-                 -e NODE_ENV=production \
-                 -e ENVIRONMENT=production \
-                 ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest; then
-              
-              echo "⏳ Waiting for container to be ready..."
-              sleep 40
-              
-              # Test endpoints with retry
-              if curl -f --retry 5 --retry-delay 15 --retry-connrefused http://localhost:8080/health && \
-                 curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8080/api/info && \
-                 curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8080/; then
-                
-                echo "✅ Production registry image tests passed on attempt $i"
-                docker stop prod-test-container
-                docker rm prod-test-container
-                break
-              else
-                echo "❌ Container tests failed on attempt $i"
-                docker logs prod-test-container || true
-                docker stop prod-test-container 2>/dev/null || true
-                docker rm prod-test-container 2>/dev/null || true
-                
-                if [ $i -eq $MAX_ATTEMPTS ]; then
-                  echo "🚨 All test attempts failed!"
-                  exit 1
-                fi
-                echo "⏳ Waiting ${DELAY}s before retry..."
-                sleep $DELAY
-              fi
-            else
-              echo "❌ Pull or container start failed on attempt $i"
-              if [ $i -eq $MAX_ATTEMPTS ]; then
-                echo "🚨 All test attempts failed!"
-                exit 1
-              fi
-              echo "⏳ Waiting ${DELAY}s before retry..."
-              sleep $DELAY
-            fi
-          done
+          echo "🔍 Testing health check endpoint..."
+          curl -f --retry 5 --retry-delay 15 --retry-connrefused http://localhost:8080/health || exit 1
+          
+          echo "🔍 Testing API info endpoint..."
+          curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8080/api/info || exit 1
+          
+          echo "🔍 Testing main application..."
+          curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8080/ || exit 1
+          
+          echo "🛑 Stopping test container..."
+          docker stop prod-test-container
+          docker rm prod-test-container
+          
+          echo "✅ Docker Hub production image tests passed!"
 
       - name: 🔍 Container Security Scan
         run: |
           echo "🔒 Running container security scan..."
           # Aqui você pode adicionar ferramentas como Trivy, Snyk, etc.
           # docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-          #   aquasec/trivy image ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
+          #   aquasec/trivy image ${{ env.IMAGE_NAME }}:latest
           echo "✅ Security scan completed!"
 
-  # Job 4: Deploy para Coolify (Produção) com Retry
+  # Job 4: Deploy para Coolify (Produção)
   deploy-prod:
-    name: 🌟 Deploy to Production (with Retry)
+    name: 🌟 Deploy to Production
     runs-on: ubuntu-latest
     needs: test-image
     environment: production
-    timeout-minutes: 20
+    timeout-minutes: 15
     
     steps:
       - name: 📥 Checkout code
@@ -296,48 +200,30 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/}
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
-      - name: 🚀 Deploy to Coolify Production (with Retry)
+      - name: 🚀 Deploy to Coolify Production
         run: |
           echo "🌟 Triggering Coolify deployment for production..."
           
           if [ -n "${{ secrets.COOLIFY_WEBHOOK_PROD }}" ]; then
-            MAX_ATTEMPTS=3
-            DELAY=20
-            
-            for i in $(seq 1 $MAX_ATTEMPTS); do
-              echo "🔄 Deploy attempt $i/$MAX_ATTEMPTS..."
-              
-              if curl -X POST "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
-                -H "Content-Type: application/json" \
-                -d '{
-                  "branch": "main",
-                  "tag": "${{ env.VERSION }}",
-                  "commit": "${{ github.sha }}",
-                  "environment": "production",
-                  "registry_url": "${{ env.REGISTRY_URL }}",
-                  "image_name": "${{ env.IMAGE_NAME }}",
-                  "image_tag": "latest",
-                  "version_tag": "${{ env.VERSION }}",
-                  "full_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest",
-                  "versioned_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}",
-                  "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
-                  "triggered_by": "${{ github.actor }}"
-                }' \
-                --max-time 60 \
-                --retry 2; then
-                
-                echo "✅ Production deployment triggered successfully on attempt $i"
-                break
-              else
-                echo "❌ Deployment trigger failed on attempt $i"
-                if [ $i -eq $MAX_ATTEMPTS ]; then
-                  echo "🚨 All deployment attempts failed!"
-                  exit 1
-                fi
-                echo "⏳ Waiting ${DELAY}s before retry..."
-                sleep $DELAY
-              fi
-            done
+            curl -X POST "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "branch": "main",
+                "tag": "${{ env.VERSION }}",
+                "commit": "${{ github.sha }}",
+                "environment": "production",
+                "registry_url": "docker.io",
+                "image_name": "${{ env.IMAGE_NAME }}",
+                "image_tag": "latest",
+                "version_tag": "${{ env.VERSION }}",
+                "full_image": "${{ env.IMAGE_NAME }}:latest",
+                "versioned_image": "${{ env.IMAGE_NAME }}:${{ env.VERSION }}",
+                "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
+                "triggered_by": "${{ github.actor }}"
+              }' \
+              --max-time 60 \
+              --retry 3
+            echo "✅ Production deployment triggered!"
           else
             echo "⚠️ COOLIFY_WEBHOOK_PROD not configured, skipping deployment trigger"
           fi
@@ -352,9 +238,9 @@ jobs:
           echo "- **Version**: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: main" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "- **Versioned Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Versioned Image**: ${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -370,16 +256,16 @@ jobs:
             echo "🚨 **Production deployment failed!**" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Job 5: Smoke Tests em Produção com Retry
+  # Job 5: Smoke Tests em Produção
   smoke-tests:
-    name: 🧪 Production Smoke Tests (with Retry)
+    name: 🧪 Production Smoke Tests
     runs-on: ubuntu-latest
     needs: deploy-prod
     if: success()
-    timeout-minutes: 15
+    timeout-minutes: 12
     
     steps:
-      - name: 🧪 Run Production Smoke Tests (with Retry)
+      - name: 🧪 Run Production Smoke Tests
         run: |
           echo "🧪 Running smoke tests on production environment..."
           
@@ -387,28 +273,15 @@ jobs:
             echo "⏳ Waiting for production deployment to stabilize..."
             sleep 90
             
-            MAX_ATTEMPTS=5
-            DELAY=20
+            # Testar endpoints principais com retry
+            echo "🔍 Testing health check..."
+            curl -f --retry 5 --retry-delay 15 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/health" || exit 1
             
-            for i in $(seq 1 $MAX_ATTEMPTS); do
-              echo "🔄 Smoke test attempt $i/$MAX_ATTEMPTS..."
-              
-              if curl -f --retry 5 --retry-delay 15 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/health" && \
-                 curl -f --retry 3 --retry-delay 10 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/api/info" && \
-                 curl -f --retry 3 --retry-delay 10 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/"; then
-                
-                echo "✅ All production smoke tests passed on attempt $i!"
-                break
-              else
-                echo "❌ Smoke tests failed on attempt $i"
-                if [ $i -eq $MAX_ATTEMPTS ]; then
-                  echo "🚨 All smoke test attempts failed!"
-                  exit 1
-                fi
-                echo "⏳ Waiting ${DELAY}s before retry..."
-                sleep $DELAY
-              fi
-            done
+            echo "🔍 Testing API info..."
+            curl -f --retry 3 --retry-delay 10 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/api/info" || exit 1
+            
+            echo "🔍 Testing main application..."
+            curl -f --retry 3 --retry-delay 10 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/" || exit 1
             
             # Testes adicionais para produção
             echo "🔍 Testing performance..."
@@ -457,9 +330,9 @@ jobs:
           echo "✅ **Production environment is healthy**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🐳 Registry Information:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Latest Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
+          echo "- **Latest Image**: ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version Image**: ${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔗 **Production URL**: ${{ secrets.PROD_DOMAIN }}" >> $GITHUB_STEP_SUMMARY
 
@@ -474,9 +347,9 @@ jobs:
           echo "🔍 **Please check the logs and consider rollback**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🔄 Rollback Options:" >> $GITHUB_STEP_SUMMARY
-          echo "Available images in registry for rollback:" >> $GITHUB_STEP_SUMMARY
-          echo "- Previous latest: Check registry history" >> $GITHUB_STEP_SUMMARY
-          echo "- Specific version: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:[VERSION]" >> $GITHUB_STEP_SUMMARY
+          echo "Available images in Docker Hub for rollback:" >> $GITHUB_STEP_SUMMARY
+          echo "- Previous latest: Check Docker Hub history" >> $GITHUB_STEP_SUMMARY
+          echo "- Specific version: ${{ env.IMAGE_NAME }}:[VERSION]" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📋 Next Steps:" >> $GITHUB_STEP_SUMMARY
           echo "1. Review deployment logs" >> $GITHUB_STEP_SUMMARY
