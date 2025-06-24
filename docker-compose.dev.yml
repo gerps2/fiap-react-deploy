@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - VITE_ENVIRONMENT=dev
+        - VITE_APP_VERSION=dev-latest
+        - VITE_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+        - VITE_LOGROCKET_ID=${VITE_LOGROCKET_ID_DEV}
+        - VITE_API_URL=${VITE_API_URL_DEV:-http://localhost:3001}
+        - VITE_DEBUG=true
+    ports:
+      - "${DEV_PORT:-8081}:8080"
+    environment:
+      - NODE_ENV=development
+      - ENVIRONMENT=dev
+      - DEBUG=true
+    volumes:
+      # Para hot reload em desenvolvimento (se necessário)
+      - ./src:/app/src:ro
+      - ./public:/app/public:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    labels:
+      - "coolify.managed=true"
+      - "coolify.environment=development"
+      - "coolify.name=fiap-react-deploy-dev"
+      - "coolify.description=Status App FIAP - Ambiente de Desenvolvimento"
+    networks:
+      - dev-network
+
+  # Serviço de desenvolvimento para logs
+  logs:
+    image: busybox:latest
+    command: tail -f /dev/null
+    volumes:
+      - /var/log:/logs:ro
+    profiles:
+      - debug
+    networks:
+      - dev-network
+
+networks:
+  dev-network:
+    driver: bridge
+    labels:
+      - "coolify.managed=true"
+      - "coolify.environment=development" 

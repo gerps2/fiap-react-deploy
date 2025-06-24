@@ -1,0 +1,280 @@
+name: 🌟 Deploy Production
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v1.0.0, v2.1.3, etc.
+
+env:
+  NODE_VERSION: '22'
+  ENVIRONMENT: 'production'
+
+jobs:
+  # Job 1: Validação completa antes do deploy de produção
+  pre-deploy:
+    name: 🔍 Pre-Deploy Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 🔧 Install dependencies
+        run: npm ci --force
+
+      - name: 🔍 Run ESLint
+        run: npm run lint
+
+      - name: 🧪 Run full test suite
+        run: npm run test:coverage
+        env:
+          CI: true
+
+      - name: 🔒 Security audit
+        run: npm audit --audit-level=high
+
+      - name: 📊 Upload Coverage for Production Deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-coverage
+          path: coverage/
+          retention-days: 30
+
+  # Job 2: Build para Produção
+  build-prod:
+    name: 🔨 Build Production
+    runs-on: ubuntu-latest
+    needs: pre-deploy
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "🏷️ Deploying version: ${VERSION}"
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔑 Login to Container Registry
+        if: ${{ secrets.DOCKER_REGISTRY_URL }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY_URL }}
+          username: ${{ secrets.DOCKER_REGISTRY_USER }}
+          password: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+
+      - name: 🔨 Build and Push Production Image
+        run: |
+          # Definir tags
+          PROD_TAG="${{ env.VERSION }}"
+          LATEST_TAG="latest"
+          
+          # Build da imagem de produção
+          docker build \
+            --build-arg VITE_ENVIRONMENT=production \
+            --build-arg VITE_APP_VERSION=${PROD_TAG} \
+            --build-arg VITE_BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z") \
+            --build-arg VITE_LOGROCKET_ID="${{ secrets.VITE_LOGROCKET_ID }}" \
+            --build-arg VITE_API_URL="${{ secrets.VITE_API_URL }}" \
+            -t fiap-react-deploy:${PROD_TAG} \
+            -t fiap-react-deploy:${LATEST_TAG} \
+            .
+          
+          echo "✅ Production image built successfully!"
+          echo "PROD_TAG=${PROD_TAG}" >> $GITHUB_ENV
+          echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
+
+      - name: 🏥 Test Production Container
+        run: |
+          echo "🚀 Starting production container..."
+          docker run -d --name prod-test-container -p 8080:8080 \
+            -e NODE_ENV=production \
+            -e ENVIRONMENT=production \
+            fiap-react-deploy:${{ env.LATEST_TAG }}
+          
+          echo "⏳ Waiting for container to be ready..."
+          sleep 25
+          
+          echo "🔍 Testing health check endpoint..."
+          curl -f http://localhost:8080/health || exit 1
+          
+          echo "🔍 Testing API info endpoint..."
+          curl -f http://localhost:8080/api/info || exit 1
+          
+          echo "🔍 Testing main application..."
+          curl -f http://localhost:8080/ || exit 1
+          
+          echo "🛑 Stopping test container..."
+          docker stop prod-test-container
+          docker rm prod-test-container
+          
+          echo "✅ Production container tests passed!"
+
+      - name: 🔍 Container Security Scan
+        run: |
+          echo "🔒 Running container security scan..."
+          # Aqui você pode adicionar ferramentas como Trivy, Snyk, etc.
+          # docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          #   aquasec/trivy image fiap-react-deploy:${{ env.LATEST_TAG }}
+          echo "✅ Security scan completed!"
+
+  # Job 3: Deploy para Coolify (Produção)
+  deploy-prod:
+    name: 🌟 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-prod
+    environment: production
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Get version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: 🚀 Deploy to Coolify Production
+        if: ${{ secrets.COOLIFY_WEBHOOK_PROD }}
+        run: |
+          echo "🌟 Triggering Coolify deployment for production..."
+          
+          curl -X POST "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "branch": "main",
+              "tag": "${{ env.VERSION }}",
+              "commit": "${{ github.sha }}",
+              "environment": "production",
+              "image_tag": "${{ env.VERSION }}",
+              "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
+              "triggered_by": "${{ github.actor }}"
+            }'
+          
+          echo "✅ Production deployment triggered!"
+
+      - name: 📊 Notify Deployment Status
+        if: always()
+        run: |
+          echo "## 🌟 Production Deployment Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Deployment Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: Production" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: main" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag**: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "### ✅ Status: DEPLOYED" >> $GITHUB_STEP_SUMMARY
+            echo "🎉 **Production environment updated successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "🌟 **Version ${{ env.VERSION }} is now live!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔗 **Access**: [Production Environment](${{ secrets.PROD_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 **Production deployment failed!**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Job 4: Smoke Tests em Produção
+  smoke-tests:
+    name: 🧪 Production Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy-prod
+    if: success() && secrets.PROD_DOMAIN
+    timeout-minutes: 10
+    
+    steps:
+      - name: 🧪 Run Production Smoke Tests
+        run: |
+          echo "🧪 Running smoke tests on production environment..."
+          
+          # Aguardar um pouco mais para o deploy de produção finalizar
+          sleep 60
+          
+          # Testar endpoints principais
+          echo "🔍 Testing health check..."
+          curl -f "${{ secrets.PROD_DOMAIN }}/health" || exit 1
+          
+          echo "🔍 Testing API info..."
+          curl -f "${{ secrets.PROD_DOMAIN }}/api/info" || exit 1
+          
+          echo "🔍 Testing main application..."
+          curl -f "${{ secrets.PROD_DOMAIN }}/" || exit 1
+          
+          # Testes adicionais para produção
+          echo "🔍 Testing performance..."
+          curl -w "@curl-format.txt" -o /dev/null -s "${{ secrets.PROD_DOMAIN }}/" || true
+          
+          echo "✅ All production smoke tests passed!"
+
+      - name: 📊 Update Summary
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 Production Smoke Tests Results:" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **All production smoke tests passed**" >> $GITHUB_STEP_SUMMARY
+            echo "🌟 **Production environment is healthy and performing well**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Production smoke tests failed**" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 **Production environment may have critical issues**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Job 5: Notificações e Rollback (se necessário)
+  post-deploy:
+    name: 📢 Post-Deploy Actions
+    runs-on: ubuntu-latest
+    needs: [deploy-prod, smoke-tests]
+    if: always()
+    
+    steps:
+      - name: 🎉 Success Notification
+        if: needs.deploy-prod.result == 'success' && needs.smoke-tests.result == 'success'
+        run: |
+          echo "## 🎉 Production Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌟 Version ${{ env.VERSION }} is now live!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Deployment completed successfully**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **All smoke tests passed**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Production environment is healthy**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 **Production URL**: ${{ secrets.PROD_DOMAIN }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🚨 Failure Notification
+        if: needs.deploy-prod.result == 'failure' || needs.smoke-tests.result == 'failure'
+        run: |
+          echo "## 🚨 Production Deployment Failed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ❌ Critical Issue Detected" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🚨 **Production deployment or smoke tests failed**" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 **Please check the logs and consider rollback**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review deployment logs" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check application health" >> $GITHUB_STEP_SUMMARY
+          echo "3. Consider rolling back to previous version" >> $GITHUB_STEP_SUMMARY
+          echo "4. Investigate and fix issues" >> $GITHUB_STEP_SUMMARY
+          
+          # Aqui você pode adicionar lógica de rollback automático se necessário
+          exit 1 

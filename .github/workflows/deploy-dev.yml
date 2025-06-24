@@ -1,0 +1,204 @@
+name: 🚀 Deploy Development
+
+on:
+  push:
+    branches: [ develop ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+
+env:
+  NODE_VERSION: '22'
+  ENVIRONMENT: 'dev'
+
+jobs:
+  # Job 1: Validação rápida antes do deploy
+  pre-deploy:
+    name: 🔍 Pre-Deploy Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 🔧 Install dependencies
+        run: npm ci --force
+
+      - name: 🧪 Run quick tests
+        run: npm test -- --passWithNoTests --watchAll=false
+        env:
+          CI: true
+
+  # Job 2: Build para Desenvolvimento
+  build-dev:
+    name: 🔨 Build Development
+    runs-on: ubuntu-latest
+    needs: pre-deploy
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔑 Login to Container Registry
+        if: ${{ secrets.DOCKER_REGISTRY_URL }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY_URL }}
+          username: ${{ secrets.DOCKER_REGISTRY_USER }}
+          password: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+
+      - name: 🔨 Build and Push Development Image
+        run: |
+          # Definir tags
+          DEV_TAG="dev-${{ github.sha }}"
+          LATEST_DEV_TAG="dev-latest"
+          
+          # Build da imagem
+          docker build \
+            --build-arg VITE_ENVIRONMENT=dev \
+            --build-arg VITE_APP_VERSION=${DEV_TAG} \
+            --build-arg VITE_BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z") \
+            --build-arg VITE_LOGROCKET_ID="${{ secrets.VITE_LOGROCKET_ID_DEV }}" \
+            --build-arg VITE_API_URL="${{ secrets.VITE_API_URL_DEV }}" \
+            --build-arg VITE_DEBUG=true \
+            -t fiap-react-deploy:${DEV_TAG} \
+            -t fiap-react-deploy:${LATEST_DEV_TAG} \
+            .
+          
+          echo "✅ Development image built successfully!"
+          echo "DEV_TAG=${DEV_TAG}" >> $GITHUB_ENV
+          echo "LATEST_DEV_TAG=${LATEST_DEV_TAG}" >> $GITHUB_ENV
+
+      - name: 🏥 Test Development Container
+        run: |
+          echo "🚀 Starting development container..."
+          docker run -d --name dev-test-container -p 8081:8080 \
+            -e NODE_ENV=development \
+            -e ENVIRONMENT=dev \
+            -e DEBUG=true \
+            fiap-react-deploy:${{ env.LATEST_DEV_TAG }}
+          
+          echo "⏳ Waiting for container to be ready..."
+          sleep 20
+          
+          echo "🔍 Testing health check endpoint..."
+          curl -f http://localhost:8081/health || exit 1
+          
+          echo "🔍 Testing API info endpoint..."
+          curl -f http://localhost:8081/api/info || exit 1
+          
+          echo "🔍 Testing main application..."
+          curl -f http://localhost:8081/ || exit 1
+          
+          echo "🛑 Stopping test container..."
+          docker stop dev-test-container
+          docker rm dev-test-container
+          
+          echo "✅ Development container tests passed!"
+
+  # Job 3: Deploy para Coolify (Desenvolvimento)
+  deploy-dev:
+    name: 🚀 Deploy to Development
+    runs-on: ubuntu-latest
+    needs: build-dev
+    environment: development
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy to Coolify Development
+        if: ${{ secrets.COOLIFY_WEBHOOK_DEV }}
+        run: |
+          echo "🚀 Triggering Coolify deployment for development..."
+          
+          curl -X POST "${{ secrets.COOLIFY_WEBHOOK_DEV }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "branch": "develop",
+              "commit": "${{ github.sha }}",
+              "environment": "development",
+              "image_tag": "dev-${{ github.sha }}",
+              "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
+              "triggered_by": "${{ github.actor }}"
+            }'
+          
+          echo "✅ Development deployment triggered!"
+
+      - name: 📊 Notify Deployment Status
+        if: always()
+        run: |
+          echo "## 🚀 Development Deployment Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Deployment Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: Development" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: develop" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag**: \`dev-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "### ✅ Status: DEPLOYED" >> $GITHUB_STEP_SUMMARY
+            echo "🎉 **Development environment updated successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔗 **Access**: [Development Environment](${{ secrets.DEV_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 **Development deployment failed!**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Job 4: Smoke Tests no ambiente deployado
+  smoke-tests:
+    name: 🧪 Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    if: success() && secrets.DEV_DOMAIN
+    timeout-minutes: 5
+    
+    steps:
+      - name: 🧪 Run Smoke Tests
+        run: |
+          echo "🧪 Running smoke tests on development environment..."
+          
+          # Aguardar um pouco para o deploy finalizar
+          sleep 30
+          
+          # Testar endpoints principais
+          echo "🔍 Testing health check..."
+          curl -f "${{ secrets.DEV_DOMAIN }}/health" || exit 1
+          
+          echo "🔍 Testing API info..."
+          curl -f "${{ secrets.DEV_DOMAIN }}/api/info" || exit 1
+          
+          echo "🔍 Testing main application..."
+          curl -f "${{ secrets.DEV_DOMAIN }}/" || exit 1
+          
+          echo "✅ All smoke tests passed!"
+
+      - name: 📊 Update Summary
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 Smoke Tests Results:" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **All smoke tests passed**" >> $GITHUB_STEP_SUMMARY
+            echo "🌐 **Development environment is healthy**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Smoke tests failed**" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 **Development environment may have issues**" >> $GITHUB_STEP_SUMMARY
+          fi 
