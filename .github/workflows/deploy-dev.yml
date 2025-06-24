@@ -117,11 +117,17 @@ jobs:
     timeout-minutes: 10
     
     steps:
+      - name: 🔑 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: 🏥 Test Development Container from Docker Hub
         run: |
           echo "🚀 Pulling and testing image from Docker Hub..."
           
-          # Pull da imagem do Docker Hub (público, não precisa login)
+          # Pull da imagem do Docker Hub
           docker pull ${{ env.IMAGE_NAME }}:dev-latest
           
           # Start container
