@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Aplicação React - Desenvolvimento
   app:
     build:
       context: .
@@ -9,15 +10,14 @@ services:
         - VITE_ENVIRONMENT=dev
         - VITE_APP_VERSION=dev-latest
         - VITE_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
-        - VITE_LOGROCKET_ID=${VITE_LOGROCKET_ID_DEV}
-        - VITE_API_URL=${VITE_API_URL_DEV:-http://localhost:3001}
+        - VITE_LOGROCKET_APP_ID=${VITE_LOGROCKET_ID_DEV}
+        - VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy-dev
         - VITE_DEBUG=true
-    ports:
-      - "${DEV_PORT:-8081}:8080"
     environment:
       - NODE_ENV=development
       - ENVIRONMENT=dev
       - DEBUG=true
+      - SERVICE_FQDN_APP_8080
     volumes:
       # Para hot reload em desenvolvimento (se necessário)
       - ./src:/app/src:ro
@@ -30,27 +30,40 @@ services:
       start_period: 20s
     restart: unless-stopped
     labels:
+      # Labels para Coolify
       - "coolify.managed=true"
       - "coolify.environment=development"
       - "coolify.name=fiap-react-deploy-dev"
       - "coolify.description=Status App FIAP - Ambiente de Desenvolvimento"
+      # Labels para Traefik
+      - "traefik.enable=true"
+      - "traefik.http.routers.fiap-react-dev.rule=Host(`${DEV_DOMAIN:-dev.gerson-prudencio.com.br}`)"
+      - "traefik.http.routers.fiap-react-dev.entrypoints=websecure"
+      - "traefik.http.routers.fiap-react-dev.tls=true"
+      - "traefik.http.routers.fiap-react-dev.tls.certresolver=letsencrypt"
+      - "traefik.http.services.fiap-react-dev.loadbalancer.server.port=8080"
+      # Headers de desenvolvimento
+      - "traefik.http.routers.fiap-react-dev.middlewares=dev-headers@docker"
+      - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Environment=development"
+      - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Debug=true"
     networks:
-      - dev-network
+      - coolify
 
-  # Serviço de desenvolvimento para logs
+  # Serviço de desenvolvimento para logs (opcional)
   logs:
     image: busybox:latest
     command: tail -f /dev/null
     volumes:
       - /var/log:/logs:ro
-    profiles:
-      - debug
-    networks:
-      - dev-network
-
-networks:
-  dev-network:
-    driver: bridge
     labels:
       - "coolify.managed=true"
-      - "coolify.environment=development" 
+      - "coolify.environment=development"
+      - "coolify.type=utility"
+    networks:
+      - coolify
+    profiles:
+      - debug
+
+networks:
+  coolify:
+    external: true 

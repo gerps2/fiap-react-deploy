@@ -8,6 +8,9 @@ on:
 env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'production'
+  # Registry configuration
+  REGISTRY_URL: 'registry.gerson-prudencio.com.br'
+  IMAGE_NAME: 'fiap-react-deploy'
 
 jobs:
   # Job 1: Validação completa antes do deploy de produção
@@ -47,12 +50,17 @@ jobs:
           path: coverage/
           retention-days: 30
 
-  # Job 2: Build para Produção
+  # Job 2: Build e Push para Registry de Produção
   build-prod:
-    name: 🔨 Build Production
+    name: 🔨 Build & Push Production
     runs-on: ubuntu-latest
     needs: pre-deploy
-    timeout-minutes: 15
+    timeout-minutes: 20
+    
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
     
     steps:
       - name: 📥 Checkout code
@@ -69,45 +77,96 @@ jobs:
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🔑 Login to Container Registry
-        if: ${{ secrets.DOCKER_REGISTRY_URL }}
+      - name: 🔑 Login to Production Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.DOCKER_REGISTRY_URL }}
-          username: ${{ secrets.DOCKER_REGISTRY_USER }}
-          password: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.PROD_REGISTRY_USER }}
+          password: ${{ secrets.PROD_REGISTRY_PASSWORD }}
+
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=FIAP React Deploy - Production
+            org.opencontainers.image.description=Status App React - Production Environment
+            org.opencontainers.image.vendor=FIAP
+            org.opencontainers.image.version=${{ steps.version.outputs.VERSION }}
 
       - name: 🔨 Build and Push Production Image
-        run: |
-          # Definir tags
-          PROD_TAG="${{ env.VERSION }}"
-          LATEST_TAG="latest"
-          
-          # Build da imagem de produção
-          docker build \
-            --build-arg VITE_ENVIRONMENT=production \
-            --build-arg VITE_APP_VERSION=${PROD_TAG} \
-            --build-arg VITE_BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z") \
-            --build-arg VITE_LOGROCKET_ID="${{ secrets.VITE_LOGROCKET_ID }}" \
-            --build-arg VITE_API_URL="${{ secrets.VITE_API_URL }}" \
-            -t fiap-react-deploy:${PROD_TAG} \
-            -t fiap-react-deploy:${LATEST_TAG} \
-            .
-          
-          echo "✅ Production image built successfully!"
-          echo "PROD_TAG=${PROD_TAG}" >> $GITHUB_ENV
-          echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_ENVIRONMENT=production
+            VITE_APP_VERSION=${{ steps.version.outputs.VERSION }}
+            VITE_BUILD_TIMESTAMP=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID }}
+            VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: 🏥 Test Production Container
+      - name: 📊 Image Summary
         run: |
-          echo "🚀 Starting production container..."
+          echo "## 🐳 Production Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Image Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags**: " >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+
+  # Job 3: Test da imagem no registry
+  test-image:
+    name: 🧪 Test Registry Image
+    runs-on: ubuntu-latest
+    needs: build-prod
+    timeout-minutes: 15
+    
+    steps:
+      - name: 🏷️ Get version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: 🔑 Login to Production Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.PROD_REGISTRY_USER }}
+          password: ${{ secrets.PROD_REGISTRY_PASSWORD }}
+
+      - name: 🏥 Test Production Container from Registry
+        run: |
+          echo "🚀 Pulling and testing production image from registry..."
+          
+          # Pull da imagem do registry
+          docker pull ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
+          
+          # Start container
           docker run -d --name prod-test-container -p 8080:8080 \
             -e NODE_ENV=production \
             -e ENVIRONMENT=production \
-            fiap-react-deploy:${{ env.LATEST_TAG }}
+            ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
           
           echo "⏳ Waiting for container to be ready..."
-          sleep 25
+          sleep 30
           
           echo "🔍 Testing health check endpoint..."
           curl -f http://localhost:8080/health || exit 1
@@ -122,21 +181,21 @@ jobs:
           docker stop prod-test-container
           docker rm prod-test-container
           
-          echo "✅ Production container tests passed!"
+          echo "✅ Production registry image tests passed!"
 
       - name: 🔍 Container Security Scan
         run: |
           echo "🔒 Running container security scan..."
           # Aqui você pode adicionar ferramentas como Trivy, Snyk, etc.
           # docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-          #   aquasec/trivy image fiap-react-deploy:${{ env.LATEST_TAG }}
+          #   aquasec/trivy image ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
           echo "✅ Security scan completed!"
 
-  # Job 3: Deploy para Coolify (Produção)
+  # Job 4: Deploy para Coolify (Produção)
   deploy-prod:
     name: 🌟 Deploy to Production
     runs-on: ubuntu-latest
-    needs: build-prod
+    needs: test-image
     environment: production
     timeout-minutes: 15
     
@@ -161,7 +220,12 @@ jobs:
               "tag": "${{ env.VERSION }}",
               "commit": "${{ github.sha }}",
               "environment": "production",
-              "image_tag": "${{ env.VERSION }}",
+              "registry_url": "${{ env.REGISTRY_URL }}",
+              "image_name": "${{ env.IMAGE_NAME }}",
+              "image_tag": "latest",
+              "version_tag": "${{ env.VERSION }}",
+              "full_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest",
+              "versioned_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}",
               "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
               "triggered_by": "${{ github.actor }}"
             }'
@@ -178,7 +242,9 @@ jobs:
           echo "- **Version**: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: main" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image Tag**: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Versioned Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -194,7 +260,7 @@ jobs:
             echo "🚨 **Production deployment failed!**" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Job 4: Smoke Tests em Produção
+  # Job 5: Smoke Tests em Produção
   smoke-tests:
     name: 🧪 Production Smoke Tests
     runs-on: ubuntu-latest
@@ -239,7 +305,7 @@ jobs:
             echo "🚨 **Production environment may have critical issues**" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Job 5: Notificações e Rollback (se necessário)
+  # Job 6: Notificações e Rollback (se necessário)
   post-deploy:
     name: 📢 Post-Deploy Actions
     runs-on: ubuntu-latest
@@ -247,6 +313,11 @@ jobs:
     if: always()
     
     steps:
+      - name: 🏷️ Get version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
       - name: 🎉 Success Notification
         if: needs.deploy-prod.result == 'success' && needs.smoke-tests.result == 'success'
         run: |
@@ -257,6 +328,11 @@ jobs:
           echo "✅ **Deployment completed successfully**" >> $GITHUB_STEP_SUMMARY
           echo "✅ **All smoke tests passed**" >> $GITHUB_STEP_SUMMARY
           echo "✅ **Production environment is healthy**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 Registry Information:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Latest Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔗 **Production URL**: ${{ secrets.PROD_DOMAIN }}" >> $GITHUB_STEP_SUMMARY
 
@@ -269,6 +345,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🚨 **Production deployment or smoke tests failed**" >> $GITHUB_STEP_SUMMARY
           echo "🔍 **Please check the logs and consider rollback**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Rollback Options:" >> $GITHUB_STEP_SUMMARY
+          echo "Available images in registry for rollback:" >> $GITHUB_STEP_SUMMARY
+          echo "- Previous latest: Check registry history" >> $GITHUB_STEP_SUMMARY
+          echo "- Specific version: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:[VERSION]" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📋 Next Steps:" >> $GITHUB_STEP_SUMMARY
           echo "1. Review deployment logs" >> $GITHUB_STEP_SUMMARY

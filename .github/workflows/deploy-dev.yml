@@ -11,6 +11,9 @@ on:
 env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'dev'
+  # Registry configuration
+  REGISTRY_URL: 'registry-dev.gerson-prudencio.com.br'
+  IMAGE_NAME: 'fiap-react-deploy'
 
 jobs:
   # Job 1: Validação rápida antes do deploy
@@ -37,12 +40,16 @@ jobs:
         env:
           CI: true
 
-  # Job 2: Build para Desenvolvimento
+  # Job 2: Build e Push para Registry de Desenvolvimento
   build-dev:
-    name: 🔨 Build Development
+    name: 🔨 Build & Push Development
     runs-on: ubuntu-latest
     needs: pre-deploy
-    timeout-minutes: 10
+    timeout-minutes: 15
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
     
     steps:
       - name: 📥 Checkout code
@@ -51,47 +58,89 @@ jobs:
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🔑 Login to Container Registry
-        if: ${{ secrets.DOCKER_REGISTRY_URL }}
+      - name: 🔑 Login to Development Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.DOCKER_REGISTRY_URL }}
-          username: ${{ secrets.DOCKER_REGISTRY_USER }}
-          password: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.DEV_REGISTRY_USER }}
+          password: ${{ secrets.DEV_REGISTRY_PASSWORD }}
+
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=dev-{{date 'YYYYMMDD'}}-
+            type=raw,value=dev-latest
+          labels: |
+            org.opencontainers.image.title=FIAP React Deploy - Development
+            org.opencontainers.image.description=Status App React - Development Environment
+            org.opencontainers.image.vendor=FIAP
 
       - name: 🔨 Build and Push Development Image
-        run: |
-          # Definir tags
-          DEV_TAG="dev-${{ github.sha }}"
-          LATEST_DEV_TAG="dev-latest"
-          
-          # Build da imagem
-          docker build \
-            --build-arg VITE_ENVIRONMENT=dev \
-            --build-arg VITE_APP_VERSION=${DEV_TAG} \
-            --build-arg VITE_BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z") \
-            --build-arg VITE_LOGROCKET_ID="${{ secrets.VITE_LOGROCKET_ID_DEV }}" \
-            --build-arg VITE_API_URL="${{ secrets.VITE_API_URL_DEV }}" \
-            --build-arg VITE_DEBUG=true \
-            -t fiap-react-deploy:${DEV_TAG} \
-            -t fiap-react-deploy:${LATEST_DEV_TAG} \
-            .
-          
-          echo "✅ Development image built successfully!"
-          echo "DEV_TAG=${DEV_TAG}" >> $GITHUB_ENV
-          echo "LATEST_DEV_TAG=${LATEST_DEV_TAG}" >> $GITHUB_ENV
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_ENVIRONMENT=dev
+            VITE_APP_VERSION=dev-${{ github.sha }}
+            VITE_BUILD_TIMESTAMP=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID_DEV }}
+            VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy-dev
+            VITE_DEBUG=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: 🏥 Test Development Container
+      - name: 📊 Image Summary
         run: |
-          echo "🚀 Starting development container..."
+          echo "## 🐳 Development Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Image Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags**: " >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+
+  # Job 3: Test da imagem no registry
+  test-image:
+    name: 🧪 Test Registry Image
+    runs-on: ubuntu-latest
+    needs: build-dev
+    timeout-minutes: 10
+    
+    steps:
+      - name: 🔑 Login to Development Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.DEV_REGISTRY_USER }}
+          password: ${{ secrets.DEV_REGISTRY_PASSWORD }}
+
+      - name: 🏥 Test Development Container from Registry
+        run: |
+          echo "🚀 Pulling and testing image from registry..."
+          
+          # Pull da imagem do registry
+          docker pull ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest
+          
+          # Start container
           docker run -d --name dev-test-container -p 8081:8080 \
             -e NODE_ENV=development \
             -e ENVIRONMENT=dev \
             -e DEBUG=true \
-            fiap-react-deploy:${{ env.LATEST_DEV_TAG }}
+            ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest
           
           echo "⏳ Waiting for container to be ready..."
-          sleep 20
+          sleep 25
           
           echo "🔍 Testing health check endpoint..."
           curl -f http://localhost:8081/health || exit 1
@@ -106,13 +155,13 @@ jobs:
           docker stop dev-test-container
           docker rm dev-test-container
           
-          echo "✅ Development container tests passed!"
+          echo "✅ Registry image tests passed!"
 
-  # Job 3: Deploy para Coolify (Desenvolvimento)
+  # Job 4: Deploy para Coolify (Desenvolvimento)
   deploy-dev:
     name: 🚀 Deploy to Development
     runs-on: ubuntu-latest
-    needs: build-dev
+    needs: test-image
     environment: development
     timeout-minutes: 10
     
@@ -131,7 +180,10 @@ jobs:
               "branch": "develop",
               "commit": "${{ github.sha }}",
               "environment": "development",
-              "image_tag": "dev-${{ github.sha }}",
+              "registry_url": "${{ env.REGISTRY_URL }}",
+              "image_name": "${{ env.IMAGE_NAME }}",
+              "image_tag": "dev-latest",
+              "full_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest",
               "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
               "triggered_by": "${{ github.actor }}"
             }'
@@ -147,7 +199,8 @@ jobs:
           echo "- **Environment**: Development" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: develop" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image Tag**: \`dev-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: ${{ env.REGISTRY_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:dev-latest" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -162,7 +215,7 @@ jobs:
             echo "🚨 **Development deployment failed!**" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Job 4: Smoke Tests no ambiente deployado
+  # Job 5: Smoke Tests no ambiente deployado
   smoke-tests:
     name: 🧪 Smoke Tests
     runs-on: ubuntu-latest
