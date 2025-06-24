@@ -52,3 +52,90 @@ export default tseslint.config({
   },
 })
 ```
+
+# FIAP React Deploy
+
+Este projeto é uma aplicação React + TypeScript + Vite com pipeline CI/CD completo implementado para deploy automatizado via Coolify.
+
+## 🚀 Pipeline CI/CD
+
+### Fluxo de Desenvolvimento
+- `main` - Branch de produção (protegida)
+- `develop` - Branch de desenvolvimento
+- `feature/*` - Branches de funcionalidades
+- `hotfix/*` - Correções urgentes
+- `release/*` - Preparação de releases
+
+### Automações Implementadas
+
+#### 🔒 Proteção da Branch Main
+- ✅ Pull Request obrigatório
+- ✅ Histórico linear (linear history)
+- ✅ Validação de título com versão (v1.2.3)
+- ✅ Validação de branch origem (develop, release/*, hotfix/*)
+
+#### 🧪 Pipeline de Validação (CI)
+- ✅ Testes automatizados com cobertura
+- ✅ Linting (ESLint)
+- ✅ Build e teste do container Docker
+- ✅ Relatórios detalhados de cobertura no PR
+
+#### 🏷️ Auto-Tagging
+- ✅ Tags criadas automaticamente no merge para main
+- ✅ Extração de versão do título do PR
+- ✅ Auto-incremento se versão não especificada
+- ✅ Release notes automáticas
+
+#### 🌟 Deploy Automático
+- ✅ Deploy production via Coolify (trigger por tag)
+- ✅ Validação pré-deploy completa
+- ✅ Relatórios de deployment
+- ✅ Rollback automático em caso de falha
+
+### Como Usar
+
+1. **Desenvolvimento Normal:**
+   ```bash
+   git checkout develop
+   git checkout -b feature/nova-funcionalidade
+   # ... desenvolvimento ...
+   git push origin feature/nova-funcionalidade
+   # Criar PR para develop
+   ```
+
+2. **Release para Produção:**
+   ```bash
+   # PR de develop para main com título:
+   # "v1.2.3: Descrição da release"
+   # Após merge: tag automática + deploy automático
+   ```
+
+3. **Hotfix Urgente:**
+   ```bash
+   git checkout main
+   git checkout -b hotfix/v1.2.4-fix-critical-bug
+   # ... correção ...
+   # PR para main com título: "v1.2.4: Correção crítica"
+   ```
+
+## 🛠️ Stack Técnica
+
+### Frontend
+- **React 18** - Framework UI
+- **TypeScript** - Tipagem estática
+- **Vite** - Build tool e dev server
+- **ESLint** - Linter de código
+
+### DevOps & Deploy
+- **Docker** - Containerização (nginx + aplicação)
+- **Coolify** - Plataforma de deploy
+- **GitHub Actions** - CI/CD pipeline
+- **Traefik** - Reverse proxy e SSL
+
+### Monitoramento
+- **Health checks** automatizados
+- **Coverage reports** em PRs
+- **Deploy status** detalhado
+- **Rollback** automático
+
+## 🔧 Desenvolvimento Local
