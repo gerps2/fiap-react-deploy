@@ -209,28 +209,30 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: 🚀 Deploy to Coolify Production
-        if: ${{ secrets.COOLIFY_WEBHOOK_PROD }}
         run: |
           echo "🌟 Triggering Coolify deployment for production..."
           
-          curl -X POST "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "branch": "main",
-              "tag": "${{ env.VERSION }}",
-              "commit": "${{ github.sha }}",
-              "environment": "production",
-              "registry_url": "${{ env.REGISTRY_URL }}",
-              "image_name": "${{ env.IMAGE_NAME }}",
-              "image_tag": "latest",
-              "version_tag": "${{ env.VERSION }}",
-              "full_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest",
-              "versioned_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}",
-              "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
-              "triggered_by": "${{ github.actor }}"
-            }'
-          
-          echo "✅ Production deployment triggered!"
+          if [ -n "${{ secrets.COOLIFY_WEBHOOK_PROD }}" ]; then
+            curl -X POST "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "branch": "main",
+                "tag": "${{ env.VERSION }}",
+                "commit": "${{ github.sha }}",
+                "environment": "production",
+                "registry_url": "${{ env.REGISTRY_URL }}",
+                "image_name": "${{ env.IMAGE_NAME }}",
+                "image_tag": "latest",
+                "version_tag": "${{ env.VERSION }}",
+                "full_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest",
+                "versioned_image": "${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}",
+                "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
+                "triggered_by": "${{ github.actor }}"
+              }'
+            echo "✅ Production deployment triggered!"
+          else
+            echo "⚠️ COOLIFY_WEBHOOK_PROD not configured, skipping deployment trigger"
+          fi
 
       - name: 📊 Notify Deployment Status
         if: always()
@@ -265,7 +267,7 @@ jobs:
     name: 🧪 Production Smoke Tests
     runs-on: ubuntu-latest
     needs: deploy-prod
-    if: success() && secrets.PROD_DOMAIN
+    if: success()
     timeout-minutes: 10
     
     steps:
@@ -273,24 +275,28 @@ jobs:
         run: |
           echo "🧪 Running smoke tests on production environment..."
           
-          # Aguardar um pouco mais para o deploy de produção finalizar
-          sleep 60
-          
-          # Testar endpoints principais
-          echo "🔍 Testing health check..."
-          curl -f "${{ secrets.PROD_DOMAIN }}/health" || exit 1
-          
-          echo "🔍 Testing API info..."
-          curl -f "${{ secrets.PROD_DOMAIN }}/api/info" || exit 1
-          
-          echo "🔍 Testing main application..."
-          curl -f "${{ secrets.PROD_DOMAIN }}/" || exit 1
-          
-          # Testes adicionais para produção
-          echo "🔍 Testing performance..."
-          curl -w "@curl-format.txt" -o /dev/null -s "${{ secrets.PROD_DOMAIN }}/" || true
-          
-          echo "✅ All production smoke tests passed!"
+          if [ -n "${{ secrets.PROD_DOMAIN }}" ]; then
+            # Aguardar um pouco mais para o deploy de produção finalizar
+            sleep 60
+            
+            # Testar endpoints principais
+            echo "🔍 Testing health check..."
+            curl -f "${{ secrets.PROD_DOMAIN }}/health" || exit 1
+            
+            echo "🔍 Testing API info..."
+            curl -f "${{ secrets.PROD_DOMAIN }}/api/info" || exit 1
+            
+            echo "🔍 Testing main application..."
+            curl -f "${{ secrets.PROD_DOMAIN }}/" || exit 1
+            
+            # Testes adicionais para produção
+            echo "🔍 Testing performance..."
+            curl -w "@curl-format.txt" -o /dev/null -s "${{ secrets.PROD_DOMAIN }}/" || true
+            
+            echo "✅ All production smoke tests passed!"
+          else
+            echo "⚠️ PROD_DOMAIN not configured, skipping smoke tests"
+          fi
 
       - name: 📊 Update Summary
         if: always()
