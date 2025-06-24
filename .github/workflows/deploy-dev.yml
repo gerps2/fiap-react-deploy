@@ -1,4 +1,4 @@
-name: 🚀 Deploy Development (with Docker Hub)
+name: 🚀 Deploy Development (Coolify)
 
 on:
   push:
@@ -11,11 +11,8 @@ on:
 env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'dev'
-  REGISTRY_URL: 'docker.io'
-  IMAGE_NAME: 'gprudencio1/fiap-react-deploy'
 
 jobs:
-  # Job 1: Validação rápida antes do deploy
   pre-deploy:
     name: 🔍 Pre-Deploy Validation
     runs-on: ubuntu-latest
@@ -39,127 +36,13 @@ jobs:
         env:
           CI: true
 
-  # Job 2: Build e Push para Docker Hub
-  build-dev:
-    name: 🔨 Build & Push Development (Docker Hub)
-    runs-on: ubuntu-latest
-    needs: pre-deploy
-    timeout-minutes: 15
-    
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
-    
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v4
+      - name: 🔍 Run ESLint
+        run: npm run lint
 
-      - name: 🐳 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔑 Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: 🏷️ Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=dev-{{date 'YYYYMMDD'}}-
-            type=raw,value=dev-latest
-            type=raw,value=latest
-          labels: |
-            org.opencontainers.image.title=FIAP React Deploy - Development
-            org.opencontainers.image.description=Status App React - Development Environment
-            org.opencontainers.image.vendor=FIAP
-
-      - name: 🔨 Build and Push Development Image
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VITE_ENVIRONMENT=dev
-            VITE_APP_VERSION=dev-${{ github.sha }}
-            VITE_BUILD_TIMESTAMP=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-            VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID_DEV }}
-            VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy-dev
-            VITE_DEBUG=true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: 📊 Image Summary
-        run: |
-          echo "## 🐳 Development Image Built" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Image Details:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tags**: " >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
-          echo "- **Digest**: ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
-
-  # Job 3: Test da imagem no Docker Hub
-  test-image:
-    name: 🧪 Test Docker Hub Image
-    runs-on: ubuntu-latest
-    needs: build-dev
-    timeout-minutes: 10
-    
-    steps:
-      - name: 🔑 Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: 🏥 Test Development Container from Docker Hub
-        run: |
-          echo "🚀 Pulling and testing image from Docker Hub..."
-          
-          # Pull da imagem do Docker Hub
-          docker pull ${{ env.IMAGE_NAME }}:dev-latest
-          
-          # Start container
-          docker run -d --name dev-test-container -p 8081:8080 \
-            -e NODE_ENV=development \
-            -e ENVIRONMENT=dev \
-            -e DEBUG=true \
-            ${{ env.IMAGE_NAME }}:dev-latest
-          
-          echo "⏳ Waiting for container to be ready..."
-          sleep 30
-          
-          echo "🔍 Testing health check endpoint..."
-          curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8081/health || exit 1
-          
-          echo "🔍 Testing API info endpoint..."
-          curl -f --retry 3 --retry-delay 5 --retry-connrefused http://localhost:8081/api/info || exit 1
-          
-          echo "🔍 Testing main application..."
-          curl -f --retry 3 --retry-delay 5 --retry-connrefused http://localhost:8081/ || exit 1
-          
-          echo "🛑 Stopping test container..."
-          docker stop dev-test-container
-          docker rm dev-test-container
-          
-          echo "✅ Docker Hub image tests passed!"
-
-  # Job 4: Deploy para Coolify (Desenvolvimento)
   deploy-dev:
     name: 🚀 Deploy to Development
     runs-on: ubuntu-latest
-    needs: test-image
+    needs: pre-deploy
     environment: development
     timeout-minutes: 10
     
@@ -178,12 +61,9 @@ jobs:
                 "branch": "develop",
                 "commit": "${{ github.sha }}",
                 "environment": "development",
-                "registry_url": "docker.io",
-                "image_name": "${{ env.IMAGE_NAME }}",
-                "image_tag": "dev-latest",
-                "full_image": "${{ env.IMAGE_NAME }}:dev-latest",
-                "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
-                "triggered_by": "${{ github.actor }}"
+                "build_timestamp": "'$(date -u +%s)'",
+                "triggered_by": "${{ github.actor }}",
+                "compose_file": "docker-compose.dev.yml"
               }' \
               --max-time 30 \
               --retry 3
@@ -192,7 +72,7 @@ jobs:
             echo "⚠️ COOLIFY_WEBHOOK_DEV not configured, skipping deployment trigger"
           fi
 
-      - name: 📊 Notify Deployment Status
+      - name: 📊 Deployment Summary
         if: always()
         run: |
           echo "## 🚀 Development Deployment Report" >> $GITHUB_STEP_SUMMARY
@@ -201,63 +81,17 @@ jobs:
           echo "- **Environment**: Development" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: develop" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ env.IMAGE_NAME }}:dev-latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compose File**: docker-compose.dev.yml" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ job.status }}" == "success" ]; then
-            echo "### ✅ Status: DEPLOYED" >> $GITHUB_STEP_SUMMARY
-            echo "🎉 **Development environment updated successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ Status: TRIGGERED" >> $GITHUB_STEP_SUMMARY
+            echo "🎉 **Development deployment triggered successfully!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "🔗 **Access**: [Development Environment](${{ secrets.DEV_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+            echo "🔗 **Access**: [Development Environment](https://${{ vars.DEV_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
           else
             echo "### ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "🚨 **Development deployment failed!**" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  # Job 5: Smoke Tests no ambiente deployado
-  smoke-tests:
-    name: 🧪 Smoke Tests
-    runs-on: ubuntu-latest
-    needs: deploy-dev
-    if: success()
-    timeout-minutes: 8
-    
-    steps:
-      - name: 🧪 Run Smoke Tests
-        run: |
-          echo "🧪 Running smoke tests on development environment..."
-          
-          if [ -n "${{ secrets.DEV_DOMAIN }}" ]; then
-            echo "⏳ Waiting for deployment to stabilize..."
-            sleep 45
-            
-            # Testar endpoints principais com retry
-            echo "🔍 Testing health check..."
-            curl -f --retry 5 --retry-delay 10 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/health" || exit 1
-            
-            echo "🔍 Testing API info..."
-            curl -f --retry 3 --retry-delay 5 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/api/info" || exit 1
-            
-            echo "🔍 Testing main application..."
-            curl -f --retry 3 --retry-delay 5 --retry-connrefused "${{ secrets.DEV_DOMAIN }}/" || exit 1
-            
-            echo "✅ All smoke tests passed!"
-          else
-            echo "⚠️ DEV_DOMAIN not configured, skipping smoke tests"
-          fi
-
-      - name: 📊 Update Summary
-        if: always()
-        run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🧪 Smoke Tests Results:" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ **All smoke tests passed**" >> $GITHUB_STEP_SUMMARY
-            echo "🌐 **Development environment is healthy**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Smoke tests failed**" >> $GITHUB_STEP_SUMMARY
-            echo "🚨 **Development environment may have issues**" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 **Development deployment trigger failed!**" >> $GITHUB_STEP_SUMMARY
           fi 

@@ -1,19 +1,15 @@
-name: 🌟 Deploy Production (with Docker Hub)
+name: 🌟 Deploy Production (Coolify)
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v1.0.0, v2.1.3, etc.
+      - 'v*.*.*'
 
 env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'production'
-  # Registry configuration
-  REGISTRY_URL: 'docker.io'
-  IMAGE_NAME: 'gprudencio1/fiap-react-deploy'
 
 jobs:
-  # Job 1: Validação completa antes do deploy de produção
   pre-deploy:
     name: 🔍 Pre-Deploy Validation
     runs-on: ubuntu-latest
@@ -50,17 +46,15 @@ jobs:
           path: coverage/
           retention-days: 30
 
-  # Job 2: Build e Push para Docker Hub
-  build-prod:
-    name: 🔨 Build & Push Production (Docker Hub)
+  deploy-prod:
+    name: 🌟 Deploy to Production
     runs-on: ubuntu-latest
     needs: pre-deploy
-    timeout-minutes: 20
+    environment: production
+    timeout-minutes: 15
     
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
     
     steps:
       - name: 📥 Checkout code
@@ -74,132 +68,6 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "🏷️ Deploying version: ${VERSION}"
 
-      - name: 🐳 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔑 Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: 🏷️ Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
-          labels: |
-            org.opencontainers.image.title=FIAP React Deploy - Production
-            org.opencontainers.image.description=Status App React - Production Environment
-            org.opencontainers.image.vendor=FIAP
-            org.opencontainers.image.version=${{ steps.version.outputs.VERSION }}
-
-      - name: 🔨 Build and Push Production Image
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VITE_ENVIRONMENT=production
-            VITE_APP_VERSION=${{ steps.version.outputs.VERSION }}
-            VITE_BUILD_TIMESTAMP=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-            VITE_LOGROCKET_APP_ID=${{ secrets.VITE_LOGROCKET_ID }}
-            VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: 📊 Image Summary
-        run: |
-          echo "## 🐳 Production Image Built" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Image Details:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tags**: " >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
-          echo "- **Digest**: ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
-
-  # Job 3: Test da imagem no Docker Hub
-  test-image:
-    name: 🧪 Test Docker Hub Image
-    runs-on: ubuntu-latest
-    needs: build-prod
-    timeout-minutes: 15
-    
-    steps:
-      - name: 🏷️ Get version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-      - name: 🏥 Test Production Container from Docker Hub
-        run: |
-          echo "🚀 Pulling and testing production image from Docker Hub..."
-          
-          # Pull da imagem do Docker Hub (público, não precisa login)
-          docker pull ${{ env.IMAGE_NAME }}:latest
-          
-          # Start container
-          docker run -d --name prod-test-container -p 8080:8080 \
-            -e NODE_ENV=production \
-            -e ENVIRONMENT=production \
-            ${{ env.IMAGE_NAME }}:latest
-          
-          echo "⏳ Waiting for container to be ready..."
-          sleep 40
-          
-          echo "🔍 Testing health check endpoint..."
-          curl -f --retry 5 --retry-delay 15 --retry-connrefused http://localhost:8080/health || exit 1
-          
-          echo "🔍 Testing API info endpoint..."
-          curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8080/api/info || exit 1
-          
-          echo "🔍 Testing main application..."
-          curl -f --retry 3 --retry-delay 10 --retry-connrefused http://localhost:8080/ || exit 1
-          
-          echo "🛑 Stopping test container..."
-          docker stop prod-test-container
-          docker rm prod-test-container
-          
-          echo "✅ Docker Hub production image tests passed!"
-
-      - name: 🔍 Container Security Scan
-        run: |
-          echo "🔒 Running container security scan..."
-          # Aqui você pode adicionar ferramentas como Trivy, Snyk, etc.
-          # docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-          #   aquasec/trivy image ${{ env.IMAGE_NAME }}:latest
-          echo "✅ Security scan completed!"
-
-  # Job 4: Deploy para Coolify (Produção)
-  deploy-prod:
-    name: 🌟 Deploy to Production
-    runs-on: ubuntu-latest
-    needs: test-image
-    environment: production
-    timeout-minutes: 15
-    
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v4
-
-      - name: 🏷️ Get version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
       - name: 🚀 Deploy to Coolify Production
         run: |
           echo "🌟 Triggering Coolify deployment for production..."
@@ -212,14 +80,10 @@ jobs:
                 "tag": "${{ env.VERSION }}",
                 "commit": "${{ github.sha }}",
                 "environment": "production",
-                "registry_url": "docker.io",
-                "image_name": "${{ env.IMAGE_NAME }}",
-                "image_tag": "latest",
-                "version_tag": "${{ env.VERSION }}",
-                "full_image": "${{ env.IMAGE_NAME }}:latest",
-                "versioned_image": "${{ env.IMAGE_NAME }}:${{ env.VERSION }}",
-                "build_timestamp": "'$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'",
-                "triggered_by": "${{ github.actor }}"
+                "version": "${{ env.VERSION }}",
+                "build_timestamp": "'$(date -u +%s)'",
+                "triggered_by": "${{ github.actor }}",
+                "compose_file": "docker-compose.yml"
               }' \
               --max-time 60 \
               --retry 3
@@ -228,7 +92,7 @@ jobs:
             echo "⚠️ COOLIFY_WEBHOOK_PROD not configured, skipping deployment trigger"
           fi
 
-      - name: 📊 Notify Deployment Status
+      - name: 📊 Deployment Summary
         if: always()
         run: |
           echo "## 🌟 Production Deployment Report" >> $GITHUB_STEP_SUMMARY
@@ -238,78 +102,26 @@ jobs:
           echo "- **Version**: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: main" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "- **Versioned Image**: ${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compose File**: docker-compose.yml" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ job.status }}" == "success" ]; then
-            echo "### ✅ Status: DEPLOYED" >> $GITHUB_STEP_SUMMARY
-            echo "🎉 **Production environment updated successfully!**" >> $GITHUB_STEP_SUMMARY
-            echo "🌟 **Version ${{ env.VERSION }} is now live!**" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ Status: TRIGGERED" >> $GITHUB_STEP_SUMMARY
+            echo "🎉 **Production deployment triggered successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "🌟 **Version ${{ env.VERSION }} deployment started!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "🔗 **Access**: [Production Environment](${{ secrets.PROD_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+            echo "🔗 **Access**: [Production Environment](https://${{ vars.PROD_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
           else
             echo "### ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "🚨 **Production deployment failed!**" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 **Production deployment trigger failed!**" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Job 5: Smoke Tests em Produção
-  smoke-tests:
-    name: 🧪 Production Smoke Tests
+  post-deploy:
+    name: 📢 Post-Deploy Status
     runs-on: ubuntu-latest
     needs: deploy-prod
-    if: success()
-    timeout-minutes: 12
-    
-    steps:
-      - name: 🧪 Run Production Smoke Tests
-        run: |
-          echo "🧪 Running smoke tests on production environment..."
-          
-          if [ -n "${{ secrets.PROD_DOMAIN }}" ]; then
-            echo "⏳ Waiting for production deployment to stabilize..."
-            sleep 90
-            
-            # Testar endpoints principais com retry
-            echo "🔍 Testing health check..."
-            curl -f --retry 5 --retry-delay 15 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/health" || exit 1
-            
-            echo "🔍 Testing API info..."
-            curl -f --retry 3 --retry-delay 10 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/api/info" || exit 1
-            
-            echo "🔍 Testing main application..."
-            curl -f --retry 3 --retry-delay 10 --retry-connrefused "${{ secrets.PROD_DOMAIN }}/" || exit 1
-            
-            # Testes adicionais para produção
-            echo "🔍 Testing performance..."
-            curl -w "Connect: %{time_connect}s, TTFB: %{time_starttransfer}s, Total: %{time_total}s\n" -o /dev/null -s "${{ secrets.PROD_DOMAIN }}/" || true
-            
-            echo "✅ All production tests completed!"
-          else
-            echo "⚠️ PROD_DOMAIN not configured, skipping smoke tests"
-          fi
-
-      - name: 📊 Update Summary
-        if: always()
-        run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🧪 Production Smoke Tests Results:" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "✅ **All production smoke tests passed**" >> $GITHUB_STEP_SUMMARY
-            echo "🌟 **Production environment is healthy and performing well**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Production smoke tests failed**" >> $GITHUB_STEP_SUMMARY
-            echo "🚨 **Production environment may have critical issues**" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  # Job 6: Notificações e Rollback (se necessário)
-  post-deploy:
-    name: 📢 Post-Deploy Actions
-    runs-on: ubuntu-latest
-    needs: [deploy-prod, smoke-tests]
     if: always()
     
     steps:
@@ -319,43 +131,30 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: 🎉 Success Notification
-        if: needs.deploy-prod.result == 'success' && needs.smoke-tests.result == 'success'
+        if: needs.deploy-prod.result == 'success'
         run: |
           echo "## 🎉 Production Deployment Successful!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🌟 Version ${{ env.VERSION }} is now live!" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌟 Version ${{ env.VERSION }} deployment triggered!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **Deployment completed successfully**" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **All smoke tests passed**" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **Production environment is healthy**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Deployment triggered successfully**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Production environment deployment started**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🐳 Registry Information:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: Docker Hub" >> $GITHUB_STEP_SUMMARY
-          echo "- **Latest Image**: ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version Image**: ${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 **Production URL**: ${{ secrets.PROD_DOMAIN }}" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 **Production URL**: https://${{ vars.PROD_DOMAIN }}" >> $GITHUB_STEP_SUMMARY
 
       - name: 🚨 Failure Notification
-        if: needs.deploy-prod.result == 'failure' || needs.smoke-tests.result == 'failure'
+        if: needs.deploy-prod.result == 'failure'
         run: |
-          echo "## 🚨 Production Deployment Failed!" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚨 Production Deployment Issues!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ❌ Critical Issue Detected" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🚨 **Production deployment or smoke tests failed**" >> $GITHUB_STEP_SUMMARY
-          echo "🔍 **Please check the logs and consider rollback**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔄 Rollback Options:" >> $GITHUB_STEP_SUMMARY
-          echo "Available images in Docker Hub for rollback:" >> $GITHUB_STEP_SUMMARY
-          echo "- Previous latest: Check Docker Hub history" >> $GITHUB_STEP_SUMMARY
-          echo "- Specific version: ${{ env.IMAGE_NAME }}:[VERSION]" >> $GITHUB_STEP_SUMMARY
+          echo "🚨 **Production deployment trigger failed**" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 **Please check the Coolify logs and application status**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📋 Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Review deployment logs" >> $GITHUB_STEP_SUMMARY
-          echo "2. Check application health" >> $GITHUB_STEP_SUMMARY
-          echo "3. Consider rolling back to previous version" >> $GITHUB_STEP_SUMMARY
-          echo "4. Investigate and fix issues" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check Coolify deployment logs" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify webhook configuration" >> $GITHUB_STEP_SUMMARY
+          echo "3. Investigate and fix issues before next deployment" >> $GITHUB_STEP_SUMMARY
           
-          # Aqui você pode adicionar lógica de rollback automático se necessário
           exit 1 
