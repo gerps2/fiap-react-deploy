@@ -29,19 +29,17 @@ services:
       start_period: 20s
     restart: unless-stopped
     labels:
-      - "coolify.managed=true"
-      - "coolify.environment=development"
-      - "coolify.name=fiap-react-deploy-dev"
-      - "coolify.description=Status App FIAP - Ambiente de Desenvolvimento"
       - "traefik.enable=true"
-      - "traefik.http.routers.fiap-react-dev.rule=Host(`dev.gerson-prudencio.com.br`)"
-      - "traefik.http.routers.fiap-react-dev.entrypoints=web,websecure"
-      - "traefik.http.routers.fiap-react-dev.tls=true"
-      - "traefik.http.routers.fiap-react-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.services.fiap-react-dev.loadbalancer.server.port=8080"
-      - "traefik.http.routers.fiap-react-dev.middlewares=dev-headers@docker"
-      - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Environment=development"
-      - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Debug=true"
+      - "traefik.http.routers.frontend-https.rule=Host(`dev.gerson-prudencio.com.br`) && PathPrefix(`/`)"
+      - "traefik.http.routers.frontend-https.entryPoints=https"
+      - "traefik.http.routers.frontend-https.middlewares=gzip"
+      - "traefik.http.routers.frontend-https.service=frontend-service"
+      - "traefik.http.routers.frontend-https.tls=true"
+      - "traefik.http.routers.frontend-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend-http.rule=Host(`dev.gerson-prudencio.com.br`) && PathPrefix(`/`)"
+      - "traefik.http.routers.frontend-http.entryPoints=http"
+      - "traefik.http.routers.frontend-http.middlewares=redirect-to-https"
+      - "traefik.http.services.frontend-service.loadbalancer.server.port=8080"
     networks:
       - coolify
 
