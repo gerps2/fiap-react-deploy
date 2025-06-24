@@ -42,9 +42,15 @@ services:
       - "traefik.http.routers.fiap-react-dev.middlewares=dev-headers@docker"
       - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Environment=development"
       - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Debug=true"
+    networks:
+      - coolify
 
 volumes:
   app-data:
     driver: local
     labels:
       - "coolify.managed=true" 
+
+networks:
+  coolify:
+    external: true
