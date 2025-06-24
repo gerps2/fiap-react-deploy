@@ -5,16 +5,10 @@ import {
   Card,
   CardContent,
   Chip,
-  TextField,
-  List,
-  ListItem,
-  ListItemText,
   Box,
   Paper,
-  Divider,
   Alert,
   Stack,
-  Button,
 } from '@mui/material';
 import {
   Speed as SpeedIcon,
@@ -29,22 +23,8 @@ if (import.meta.env.PROD) {
   LogRocket.init('your-app-id/your-project-name');
 }
 
-interface StatusItem {
-  id: number;
-  text: string;
-  timestamp: string;
-}
-
 function App() {
   const [counter, setCounter] = useState(0);
-  const [newItem, setNewItem] = useState('');
-  const [statusItems, setStatusItems] = useState<StatusItem[]>([
-    {
-      id: 1,
-      text: 'Sistema inicializado',
-      timestamp: new Date().toISOString(),
-    },
-  ]);
 
   // Variáveis de ambiente e informações do sistema
   const environment = import.meta.env.VITE_ENVIRONMENT || 'DEV';
@@ -73,27 +53,6 @@ function App() {
         newValue: newCount,
         timestamp: new Date().toISOString() 
       });
-    }
-  };
-
-  const addStatusItem = () => {
-    if (newItem.trim()) {
-      const item: StatusItem = {
-        id: Date.now(),
-        text: newItem,
-        timestamp: new Date().toISOString(),
-      };
-      
-      setStatusItems(prev => [item, ...prev]);
-      setNewItem('');
-      
-      // Log da ação no LogRocket
-      if (isProduction) {
-        LogRocket.log('Status item added', { 
-          item: item.text,
-          timestamp: item.timestamp 
-        });
-      }
     }
   };
 
@@ -296,97 +255,6 @@ function App() {
                 },
               }}
             >
-              <CardContent sx={{ p: { xs: 2, sm: 3, md: 4 } }}>
-                <Typography 
-                  variant="h5" 
-                  gutterBottom 
-                  color="primary" 
-                  sx={{ 
-                    mb: 3,
-                    fontSize: { xs: '1.25rem', sm: '1.5rem' },
-                    textAlign: { xs: 'center', sm: 'left' },
-                    fontWeight: 'bold',
-                  }}
-                >
-                  Sistema de Status em Tempo Real
-                </Typography>
-                
-                <Stack 
-                  direction={{ xs: 'column', sm: 'row' }} 
-                  spacing={2} 
-                  sx={{ mb: 3 }}
-                >
-                  <TextField
-                    fullWidth
-                    variant="outlined"
-                    label="Adicionar novo status"
-                    value={newItem}
-                    onChange={(e) => setNewItem(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && addStatusItem()}
-                    sx={{
-                      '& .MuiOutlinedInput-root': {
-                        borderRadius: 2,
-                      },
-                    }}
-                  />
-                  <Button
-                    variant="contained"
-                    onClick={addStatusItem}
-                    disabled={!newItem.trim()}
-                    sx={{ 
-                      minWidth: { xs: '100%', sm: 120 },
-                      py: { xs: 1.5, sm: 1 },
-                      borderRadius: 2,
-                      fontWeight: 'bold',
-                      textTransform: 'none',
-                    }}
-                  >
-                    Adicionar
-                  </Button>
-                </Stack>
-
-                <Divider sx={{ mb: 2 }} />
-
-                <List sx={{ 
-                  maxHeight: { xs: 300, sm: 400 }, 
-                  overflow: 'auto',
-                  '& .MuiListItem-root': {
-                    borderRadius: 1,
-                    mb: 1,
-                    '&:hover': {
-                      backgroundColor: 'rgba(0, 0, 0, 0.04)',
-                    },
-                  },
-                }}>
-                  {statusItems.map((item) => (
-                    <ListItem key={item.id} divider>
-                      <ListItemText
-                        primary={item.text}
-                        secondary={`Adicionado em: ${formatDate(item.timestamp)}`}
-                        primaryTypographyProps={{
-                          fontSize: { xs: '0.9rem', sm: '1rem' },
-                          fontWeight: 500,
-                        }}
-                        secondaryTypographyProps={{
-                          fontSize: { xs: '0.8rem', sm: '0.875rem' },
-                        }}
-                      />
-                    </ListItem>
-                  ))}
-                </List>
-
-                {statusItems.length === 0 && (
-                  <Typography 
-                    variant="body2" 
-                    color="text.secondary" 
-                    textAlign="center" 
-                    py={4}
-                    sx={{ fontSize: { xs: '0.9rem', sm: '1rem' } }}
-                  >
-                    Nenhum item de status adicionado ainda.
-                  </Typography>
-                )}
-              </CardContent>
             </Card>
           </Stack>
 
