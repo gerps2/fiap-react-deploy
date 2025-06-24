@@ -5,16 +5,10 @@ import {
   Card,
   CardContent,
   Chip,
-  TextField,
-  List,
-  ListItem,
-  ListItemText,
   Box,
   Paper,
-  Divider,
   Alert,
   Stack,
-  Button,
 } from '@mui/material';
 import {
   Speed as SpeedIcon,
@@ -29,22 +23,8 @@ if (import.meta.env.PROD) {
   LogRocket.init('your-app-id/your-project-name');
 }
 
-interface StatusItem {
-  id: number;
-  text: string;
-  timestamp: string;
-}
-
 function App() {
   const [counter, setCounter] = useState(0);
-  const [newItem, setNewItem] = useState('');
-  const [statusItems, setStatusItems] = useState<StatusItem[]>([
-    {
-      id: 1,
-      text: 'Sistema inicializado',
-      timestamp: new Date().toISOString(),
-    },
-  ]);
 
   // Variáveis de ambiente e informações do sistema
   const environment = import.meta.env.VITE_ENVIRONMENT || 'DEV';
@@ -73,27 +53,6 @@ function App() {
         newValue: newCount,
         timestamp: new Date().toISOString() 
       });
-    }
-  };
-
-  const addStatusItem = () => {
-    if (newItem.trim()) {
-      const item: StatusItem = {
-        id: Date.now(),
-        text: newItem,
-        timestamp: new Date().toISOString(),
-      };
-      
-      setStatusItems(prev => [item, ...prev]);
-      setNewItem('');
-      
-      // Log da ação no LogRocket
-      if (isProduction) {
-        LogRocket.log('Status item added', { 
-          item: item.text,
-          timestamp: item.timestamp 
-        });
-      }
     }
   };
 
