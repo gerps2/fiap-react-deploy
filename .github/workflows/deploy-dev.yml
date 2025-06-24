@@ -11,8 +11,8 @@ on:
 env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'dev'
-  # Registry configuration
-  REGISTRY_URL: 'registry-dev.gerson-prudencio.com.br'
+  # Registry configuration - usando o mesmo registry para dev e prod
+  REGISTRY_URL: 'registry.gerson-prudencio.com.br'
   IMAGE_NAME: 'fiap-react-deploy'
 
 jobs:
@@ -62,8 +62,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_URL }}
-          username: ${{ secrets.DEV_REGISTRY_USER }}
-          password: ${{ secrets.DEV_REGISTRY_PASSWORD }}
+          username: ${{ secrets.PROD_REGISTRY_USER }}
+          password: ${{ secrets.PROD_REGISTRY_PASSWORD }}
 
       - name: 🏷️ Extract metadata
         id: meta
@@ -122,8 +122,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_URL }}
-          username: ${{ secrets.DEV_REGISTRY_USER }}
-          password: ${{ secrets.DEV_REGISTRY_PASSWORD }}
+          username: ${{ secrets.PROD_REGISTRY_USER }}
+          password: ${{ secrets.PROD_REGISTRY_PASSWORD }}
 
       - name: 🏥 Test Development Container from Registry
         run: |
