@@ -2,6 +2,7 @@ name: 🌟 Deploy Production (Coolify)
 
 on:
   push:
+    branches: [ main ]
     tags:
       - 'v*.*.*'
 
@@ -15,31 +16,64 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     
+    outputs:
+      deploy: ${{ steps.should-deploy.outputs.deploy }}
+      trigger: ${{ steps.should-deploy.outputs.trigger }}
+    
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Check if should deploy
+        id: should-deploy
+        run: |
+          # Se for trigger por tag, sempre deployr
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+            echo "trigger=tag" >> $GITHUB_OUTPUT
+            echo "🏷️ Deploy triggered by tag: ${{ github.ref }}"
+          else
+            # Se for push na main, verificar se foi um merge de PR com versão
+            COMMIT_MSG=$(git log -1 --pretty=%B)
+            if echo "$COMMIT_MSG" | grep -qE 'v[0-9]+\.[0-9]+\.[0-9]+'; then
+              echo "deploy=true" >> $GITHUB_OUTPUT
+              echo "trigger=main" >> $GITHUB_OUTPUT
+              echo "🚀 Deploy triggered by main push with version"
+            else
+              echo "deploy=false" >> $GITHUB_OUTPUT
+              echo "⏭️ Skipping deploy - no version found in commit"
+            fi
+          fi
 
       - name: 📦 Setup Node.js
+        if: steps.should-deploy.outputs.deploy == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: 🔧 Install dependencies
+        if: steps.should-deploy.outputs.deploy == 'true'
         run: npm ci --force
 
       - name: 🔍 Run ESLint
+        if: steps.should-deploy.outputs.deploy == 'true'
         run: npm run lint
 
       - name: 🧪 Run full test suite
+        if: steps.should-deploy.outputs.deploy == 'true'
         run: npm run test:coverage
         env:
           CI: true
 
       - name: 🔒 Security audit
+        if: steps.should-deploy.outputs.deploy == 'true'
         run: npm audit --audit-level=high
 
       - name: 📊 Upload Coverage for Production Deploy
+        if: steps.should-deploy.outputs.deploy == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: production-coverage
@@ -50,6 +84,7 @@ jobs:
     name: 🌟 Deploy to Production
     runs-on: ubuntu-latest
     needs: pre-deploy
+    if: needs.pre-deploy.outputs.deploy == 'true'
     environment: production
     timeout-minutes: 15
     
@@ -59,14 +94,30 @@ jobs:
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 🏷️ Extract version from tag
+      - name: 🏷️ Extract version
         id: version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Se for tag, extrair da tag
+            VERSION=${GITHUB_REF#refs/tags/}
+            echo "🏷️ Version from tag: ${VERSION}"
+          else
+            # Se for push na main, extrair do commit/PR
+            VERSION=$(git log -1 --pretty=%B | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            if [ -z "$VERSION" ]; then
+              # Buscar na última tag como fallback
+              VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+              echo "🔄 Using latest tag as fallback: ${VERSION}"
+            fi
+            echo "🚀 Version from commit: ${VERSION}"
+          fi
+          
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "🏷️ Deploying version: ${VERSION}"
+          echo "🎯 Final version: ${VERSION}"
 
       - name: 🚀 Deploy to Coolify Production
         run: |
