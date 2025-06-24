@@ -161,7 +161,7 @@ function App() {
                 fontSize: { xs: '1rem', sm: '1.1rem', md: '1.25rem' },
               }}
             >
-              Monitoramento em tempo real do ambiente de deploy - v1.2.6 🚀
+              Monitoramento em tempo real do ambiente de deploy - v1.2.7 🚀
             </Typography>
           </Paper>
 
