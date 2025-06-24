@@ -72,6 +72,7 @@ jobs:
             type=ref,event=branch
             type=sha,prefix=dev-{{date 'YYYYMMDD'}}-
             type=raw,value=dev-latest
+            type=raw,value=latest
           labels: |
             org.opencontainers.image.title=FIAP React Deploy - Development
             org.opencontainers.image.description=Status App React - Development Environment
