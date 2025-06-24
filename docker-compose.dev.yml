@@ -17,7 +17,7 @@ services:
       - ENVIRONMENT=dev
       - DEBUG=true
     ports:
-      - "8080:8080"
+      - "5000:8080"
     volumes:
       - ./src:/app/src:ro
       - ./public:/app/public:ro
@@ -38,7 +38,7 @@ services:
       - "traefik.http.routers.fiap-react-dev.entrypoints=websecure"
       - "traefik.http.routers.fiap-react-dev.tls=true"
       - "traefik.http.routers.fiap-react-dev.tls.certresolver=letsencrypt"
-      - "traefik.http.services.fiap-react-dev.loadbalancer.server.port=8080"
+      - "traefik.http.services.fiap-react-dev.loadbalancer.server.port=5000"
       - "traefik.http.routers.fiap-react-dev.middlewares=dev-headers@docker"
       - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Environment=development"
       - "traefik.http.middlewares.dev-headers.headers.customRequestHeaders.X-Debug=true"

@@ -16,7 +16,7 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - ENVIRONMENT=${ENVIRONMENT:-production}
     ports:
-      - "8080:8080"
+      - "5000:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -37,7 +37,7 @@ services:
       - "traefik.http.routers.fiap-react-prod.entrypoints=websecure"
       - "traefik.http.routers.fiap-react-prod.tls=true"
       - "traefik.http.routers.fiap-react-prod.tls.certresolver=letsencrypt"
-      - "traefik.http.services.fiap-react-prod.loadbalancer.server.port=8080"
+      - "traefik.http.services.fiap-react-prod.loadbalancer.server.port=5000"
       # Headers de segurança
       - "traefik.http.routers.fiap-react-prod.middlewares=security-headers@docker"
       - "traefik.http.middlewares.security-headers.headers.frameDeny=true"
