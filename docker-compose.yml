@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # Aplicação React - Produção
   app:
     build:
       context: .
@@ -25,33 +24,26 @@ services:
       start_period: 40s
     restart: unless-stopped
     labels:
-      # Labels para Coolify
-      - "coolify.managed=true"
-      - "coolify.version=1.0"
-      - "coolify.name=fiap-react-deploy"
-      - "coolify.description=Status App FIAP - Painel de Diagnóstico do Deploy"
-      - "coolify.environment=production"
-      # Labels para Traefik (configurados pelo Coolify)
       - "traefik.enable=true"
-      - "traefik.http.routers.fiap-react-prod.rule=Host(`${PROD_DOMAIN:-app.gerson-prudencio.com.br}`)"
-      - "traefik.http.routers.fiap-react-prod.entrypoints=websecure"
-      - "traefik.http.routers.fiap-react-prod.tls=true"
-      - "traefik.http.routers.fiap-react-prod.tls.certresolver=letsencrypt"
-      - "traefik.http.services.fiap-react-prod.loadbalancer.server.port=5000"
-      # Headers de segurança
-      - "traefik.http.routers.fiap-react-prod.middlewares=security-headers@docker"
-      - "traefik.http.middlewares.security-headers.headers.frameDeny=true"
-      - "traefik.http.middlewares.security-headers.headers.sslRedirect=true"
-      - "traefik.http.middlewares.security-headers.headers.browserXssFilter=true"
-      - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
-      - "traefik.http.middlewares.security-headers.headers.forceSTSHeader=true"
-      - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
-      - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
-      - "traefik.http.middlewares.security-headers.headers.stsPreload=true"
+      - "traefik.http.routers.app-https.rule=Host(`app.gerson-prudencio.com.br`) && PathPrefix(`/`)"
+      - "traefik.http.routers.app-https.entryPoints=https"
+      - "traefik.http.routers.app-https.middlewares=gzip"
+      - "traefik.http.routers.app-https.service=app-service"
+      - "traefik.http.routers.app-https.tls=true"
+      - "traefik.http.routers.app-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.app-http.rule=Host(`app.gerson-prudencio.com.br`) && PathPrefix(`/`)"
+      - "traefik.http.routers.app-http.entryPoints=http"
+      - "traefik.http.routers.app-http.middlewares=redirect-to-https"
+      - "traefik.http.services.app-service.loadbalancer.server.port=8080"
+    networks:
+      - coolify
 
-# Volumes para persistência (se necessário no futuro)
 volumes:
   app-data:
     driver: local
     labels:
-      - "coolify.managed=true" 
+      - "coolify.managed=true"
+
+networks:
+  coolify:
+    external: true 
