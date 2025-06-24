@@ -7,6 +7,10 @@ on:
 env:
   NODE_VERSION: '22'
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   auto-tag:
     name: 🏷️ Create Release Tag
@@ -87,8 +91,8 @@ jobs:
         if: steps.tag-check.outputs.exists == 'false'
         run: |
           # Configurar git
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # Gerar release notes baseado nos commits desde a última tag
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -109,7 +113,8 @@ jobs:
           - **Author**: ${{ github.actor }}
           - **Deployment**: Automatic via Coolify"
           
-          # Push da tag
+          # Push da tag usando HTTPS com token
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git push origin "${{ steps.version.outputs.VERSION }}"
           
           echo "✅ Tag ${{ steps.version.outputs.VERSION }} criada e enviada!"
