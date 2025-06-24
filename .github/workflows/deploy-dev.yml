@@ -54,22 +54,23 @@ jobs:
         run: |
           echo "🚀 Triggering Coolify deployment for development..."
           
-          if [ -n "${{ secrets.COOLIFY_WEBHOOK_DEV }}" ]; then
-            curl -X POST "${{ secrets.COOLIFY_WEBHOOK_DEV }}" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "branch": "develop",
-                "commit": "${{ github.sha }}",
-                "environment": "development",
-                "build_timestamp": "'$(date -u +%s)'",
-                "triggered_by": "${{ github.actor }}",
-                "compose_file": "docker-compose.dev.yml"
-              }' \
+          if [ -n "${{ secrets.COOLIFY_WEBHOOK_DEV }}" ] && [ -n "${{ secrets.COOLIFY_WEBHOOK_TOKEN }}" ]; then
+            curl --request GET "${{ secrets.COOLIFY_WEBHOOK_DEV }}" \
+              --header "Authorization: Bearer ${{ secrets.COOLIFY_WEBHOOK_TOKEN }}" \
               --max-time 30 \
-              --retry 3
+              --retry 3 \
+              --retry-delay 5 \
+              --fail-with-body || {
+                echo "❌ Webhook falhou"
+                echo "ℹ️ Verifique se o webhook URL e token estão corretos"
+                echo "ℹ️ URL: ${{ secrets.COOLIFY_WEBHOOK_DEV }}"
+                exit 1
+              }
             echo "✅ Development deployment triggered!"
           else
-            echo "⚠️ COOLIFY_WEBHOOK_DEV not configured, skipping deployment trigger"
+            echo "⚠️ COOLIFY_WEBHOOK_DEV ou COOLIFY_WEBHOOK_TOKEN not configured"
+            echo "ℹ️ Configure os secrets ou ative Auto-Deploy no Coolify"
+            echo "ℹ️ Como alternativa, o push para 'develop' pode ter triggered automaticamente"
           fi
 
       - name: 📊 Deployment Summary
@@ -91,7 +92,14 @@ jobs:
             echo "🎉 **Development deployment triggered successfully!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "🔗 **Access**: [Development Environment](https://${{ vars.DEV_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "💡 **Tip**: Check your Coolify dashboard for deployment status" >> $GITHUB_STEP_SUMMARY
           else
             echo "### ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
             echo "🚨 **Development deployment trigger failed!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔧 **Next Steps**:" >> $GITHUB_STEP_SUMMARY
+            echo "1. Check if Auto-Deploy is enabled in Coolify" >> $GITHUB_STEP_SUMMARY
+            echo "2. Verify COOLIFY_WEBHOOK_DEV and COOLIFY_WEBHOOK_TOKEN in GitHub secrets" >> $GITHUB_STEP_SUMMARY
+            echo "3. Check Coolify server and webhook configuration" >> $GITHUB_STEP_SUMMARY
           fi 

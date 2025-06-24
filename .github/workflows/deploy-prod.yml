@@ -72,24 +72,23 @@ jobs:
         run: |
           echo "🌟 Triggering Coolify deployment for production..."
           
-          if [ -n "${{ secrets.COOLIFY_WEBHOOK_PROD }}" ]; then
-            curl -X POST "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "branch": "main",
-                "tag": "${{ env.VERSION }}",
-                "commit": "${{ github.sha }}",
-                "environment": "production",
-                "version": "${{ env.VERSION }}",
-                "build_timestamp": "'$(date -u +%s)'",
-                "triggered_by": "${{ github.actor }}",
-                "compose_file": "docker-compose.yml"
-              }' \
+          if [ -n "${{ secrets.COOLIFY_WEBHOOK_PROD }}" ] && [ -n "${{ secrets.COOLIFY_WEBHOOK_TOKEN }}" ]; then
+            curl --request GET "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
+              --header "Authorization: Bearer ${{ secrets.COOLIFY_WEBHOOK_TOKEN }}" \
               --max-time 60 \
-              --retry 3
+              --retry 3 \
+              --retry-delay 10 \
+              --fail-with-body || {
+                echo "❌ Webhook falhou"
+                echo "ℹ️ Verifique se o webhook URL e token estão corretos"
+                echo "ℹ️ URL: ${{ secrets.COOLIFY_WEBHOOK_PROD }}"
+                exit 1
+              }
             echo "✅ Production deployment triggered!"
           else
-            echo "⚠️ COOLIFY_WEBHOOK_PROD not configured, skipping deployment trigger"
+            echo "⚠️ COOLIFY_WEBHOOK_PROD ou COOLIFY_WEBHOOK_TOKEN not configured"
+            echo "ℹ️ Configure os secrets ou ative Auto-Deploy no Coolify"
+            echo "ℹ️ Como alternativa, a tag pode ter triggered automaticamente"
           fi
 
       - name: 📊 Deployment Summary
@@ -113,9 +112,16 @@ jobs:
             echo "🌟 **Version ${{ env.VERSION }} deployment started!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "🔗 **Access**: [Production Environment](https://${{ vars.PROD_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "💡 **Tip**: Check your Coolify dashboard for deployment status" >> $GITHUB_STEP_SUMMARY
           else
             echo "### ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
             echo "🚨 **Production deployment trigger failed!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔧 **Next Steps**:" >> $GITHUB_STEP_SUMMARY
+            echo "1. Check if Auto-Deploy is enabled in Coolify" >> $GITHUB_STEP_SUMMARY
+            echo "2. Verify COOLIFY_WEBHOOK_PROD and COOLIFY_WEBHOOK_TOKEN in GitHub secrets" >> $GITHUB_STEP_SUMMARY
+            echo "3. Check Coolify server and webhook configuration" >> $GITHUB_STEP_SUMMARY
           fi
 
   post-deploy:
