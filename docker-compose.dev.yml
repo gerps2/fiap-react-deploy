@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - VITE_ENVIRONMENT=dev
+        - VITE_APP_VERSION=dev-latest
+        - VITE_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+        - VITE_LOGROCKET_APP_ID=${VITE_LOGROCKET_ID_DEV}
+        - VITE_LOGROCKET_PROJECT_NAME=fiap-react-deploy-dev
+        - VITE_DEBUG=true
+    environment:
+      - NODE_ENV=development
+      - ENVIRONMENT=dev
+      - DEBUG=true
+    ports:
+      - "5000:8080"
+    volumes:
+      - ./src:/app/src:ro
+      - ./public:/app/public:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend-https.rule=Host(`dev.gerson-prudencio.com.br`) && PathPrefix(`/`)"
+      - "traefik.http.routers.frontend-https.entryPoints=https"
+      - "traefik.http.routers.frontend-https.middlewares=gzip"
+      - "traefik.http.routers.frontend-https.service=frontend-service"
+      - "traefik.http.routers.frontend-https.tls=true"
+      - "traefik.http.routers.frontend-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend-http.rule=Host(`dev.gerson-prudencio.com.br`) && PathPrefix(`/`)"
+      - "traefik.http.routers.frontend-http.entryPoints=http"
+      - "traefik.http.routers.frontend-http.middlewares=redirect-to-https"
+      - "traefik.http.services.frontend-service.loadbalancer.server.port=8080"
+    networks:
+      - coolify
+
+volumes:
+  app-data:
+    driver: local
+    labels:
+      - "coolify.managed=true" 
+
+networks:
+  coolify:
+    external: true

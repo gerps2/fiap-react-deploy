@@ -1,0 +1,166 @@
+name: 🌟 Deploy Production (Coolify)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  NODE_VERSION: '22'
+  ENVIRONMENT: 'production'
+
+jobs:
+  pre-deploy:
+    name: 🔍 Pre-Deploy Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 🔧 Install dependencies
+        run: npm ci --force
+
+      - name: 🔍 Run ESLint
+        run: npm run lint
+
+      - name: 🧪 Run full test suite
+        run: npm run test:coverage
+        env:
+          CI: true
+
+      - name: 🔒 Security audit
+        run: npm audit --audit-level=high
+
+      - name: 📊 Upload Coverage for Production Deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-coverage
+          path: coverage/
+          retention-days: 30
+
+  deploy-prod:
+    name: 🌟 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: pre-deploy
+    environment: production
+    timeout-minutes: 15
+    
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "🏷️ Deploying version: ${VERSION}"
+
+      - name: 🚀 Deploy to Coolify Production
+        run: |
+          echo "🌟 Triggering Coolify deployment for production..."
+          
+          if [ -n "${{ secrets.COOLIFY_WEBHOOK_PROD }}" ] && [ -n "${{ secrets.COOLIFY_WEBHOOK_TOKEN }}" ]; then
+            curl --request GET "${{ secrets.COOLIFY_WEBHOOK_PROD }}" \
+              --header "Authorization: Bearer ${{ secrets.COOLIFY_WEBHOOK_TOKEN }}" \
+              --max-time 60 \
+              --retry 3 \
+              --retry-delay 10 \
+              --fail-with-body || {
+                echo "❌ Webhook falhou"
+                echo "ℹ️ Verifique se o webhook URL e token estão corretos"
+                echo "ℹ️ URL: ${{ secrets.COOLIFY_WEBHOOK_PROD }}"
+                exit 1
+              }
+            echo "✅ Production deployment triggered!"
+          else
+            echo "⚠️ COOLIFY_WEBHOOK_PROD ou COOLIFY_WEBHOOK_TOKEN not configured"
+            echo "ℹ️ Configure os secrets ou ative Auto-Deploy no Coolify"
+            echo "ℹ️ Como alternativa, a tag pode ter triggered automaticamente"
+          fi
+
+      - name: 📊 Deployment Summary
+        if: always()
+        run: |
+          echo "## 🌟 Production Deployment Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Deployment Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: Production" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: main" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compose File**: docker-compose.yml" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "### ✅ Status: TRIGGERED" >> $GITHUB_STEP_SUMMARY
+            echo "🎉 **Production deployment triggered successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "🌟 **Version ${{ env.VERSION }} deployment started!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔗 **Access**: [Production Environment](https://${{ vars.PROD_DOMAIN }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "💡 **Tip**: Check your Coolify dashboard for deployment status" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 **Production deployment trigger failed!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔧 **Next Steps**:" >> $GITHUB_STEP_SUMMARY
+            echo "1. Check if Auto-Deploy is enabled in Coolify" >> $GITHUB_STEP_SUMMARY
+            echo "2. Verify COOLIFY_WEBHOOK_PROD and COOLIFY_WEBHOOK_TOKEN in GitHub secrets" >> $GITHUB_STEP_SUMMARY
+            echo "3. Check Coolify server and webhook configuration" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  post-deploy:
+    name: 📢 Post-Deploy Status
+    runs-on: ubuntu-latest
+    needs: deploy-prod
+    if: always()
+    
+    steps:
+      - name: 🏷️ Get version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: 🎉 Success Notification
+        if: needs.deploy-prod.result == 'success'
+        run: |
+          echo "## 🎉 Production Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌟 Version ${{ env.VERSION }} deployment triggered!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Deployment triggered successfully**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Production environment deployment started**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 **Production URL**: https://${{ vars.PROD_DOMAIN }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🚨 Failure Notification
+        if: needs.deploy-prod.result == 'failure'
+        run: |
+          echo "## 🚨 Production Deployment Issues!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ❌ Critical Issue Detected" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🚨 **Production deployment trigger failed**" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 **Please check the Coolify logs and application status**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check Coolify deployment logs" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify webhook configuration" >> $GITHUB_STEP_SUMMARY
+          echo "3. Investigate and fix issues before next deployment" >> $GITHUB_STEP_SUMMARY
+          
+          exit 1 
