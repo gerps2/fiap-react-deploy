@@ -1,0 +1,144 @@
+name: 🏷️ Auto Tag on Main Merge
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  auto-tag:
+    name: 🏷️ Create Release Tag
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip-tag]') && !contains(github.event.head_commit.message, 'Merge pull request')"
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract version from commit or PR
+        id: version
+        run: |
+          # Buscar versão no commit message (formato: v1.2.3 ou 1.2.3)
+          VERSION=$(git log -1 --pretty=%B | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          
+          # Se não encontrou, buscar no título do último PR merged
+          if [ -z "$VERSION" ]; then
+            LAST_MERGE=$(git log --merges -1 --pretty=%B)
+            VERSION=$(echo "$LAST_MERGE" | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          fi
+          
+          # Se ainda não encontrou, usar semver baseado na última tag
+          if [ -z "$VERSION" ]; then
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            echo "🏷️ Última tag encontrada: $LAST_TAG"
+            
+            # Incrementar patch version
+            VERSION=$(echo $LAST_TAG | sed 's/v//' | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
+            VERSION="v$VERSION"
+            echo "🔄 Auto-incrementando para: $VERSION"
+          fi
+          
+          # Remover 'v' se existir e recolocar para padronizar
+          VERSION=$(echo $VERSION | sed 's/^v//')
+          VERSION="v$VERSION"
+          
+          echo "🎯 Versão final: $VERSION"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_NUMBER=$(echo $VERSION | sed 's/v//')" >> $GITHUB_OUTPUT
+
+      - name: 🔍 Check if tag already exists
+        id: tag-check
+        run: |
+          if git rev-parse "refs/tags/${{ steps.version.outputs.VERSION }}" >/dev/null 2>&1; then
+            echo "⚠️ Tag ${{ steps.version.outputs.VERSION }} já existe"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Tag ${{ steps.version.outputs.VERSION }} é nova"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📦 Setup Node.js
+        if: steps.tag-check.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 🔧 Install dependencies
+        if: steps.tag-check.outputs.exists == 'false'
+        run: npm ci --force
+
+      - name: 🧪 Run tests
+        if: steps.tag-check.outputs.exists == 'false'
+        run: npm run test -- --passWithNoTests --watchAll=false
+        env:
+          CI: true
+
+      - name: 🔍 Run ESLint
+        if: steps.tag-check.outputs.exists == 'false'
+        run: npm run lint
+
+      - name: 🏷️ Create and push tag
+        if: steps.tag-check.outputs.exists == 'false'
+        run: |
+          # Configurar git
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Gerar release notes baseado nos commits desde a última tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            RELEASE_NOTES=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+          else
+            RELEASE_NOTES=$(git log --pretty=format:"- %s" --no-merges -10)
+          fi
+          
+          # Criar tag anotada com release notes
+          git tag -a "${{ steps.version.outputs.VERSION }}" -m "🚀 Release ${{ steps.version.outputs.VERSION }}
+
+          ## 📋 Changes:
+          $RELEASE_NOTES
+          
+          ## 🔗 Links:
+          - **Commit**: ${{ github.sha }}
+          - **Author**: ${{ github.actor }}
+          - **Deployment**: Automatic via Coolify"
+          
+          # Push da tag
+          git push origin "${{ steps.version.outputs.VERSION }}"
+          
+          echo "✅ Tag ${{ steps.version.outputs.VERSION }} criada e enviada!"
+
+      - name: 📊 Create Release Summary
+        if: steps.tag-check.outputs.exists == 'false'
+        run: |
+          echo "## 🏷️ Release Tag Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Tag Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: \`${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Author**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: main" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. ✅ Tag created automatically" >> $GITHUB_STEP_SUMMARY
+          echo "2. 🔄 Production deployment will be triggered automatically" >> $GITHUB_STEP_SUMMARY
+          echo "3. 📊 Check the deploy-prod workflow for deployment status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Release ${{ steps.version.outputs.VERSION }} is ready for production!**" >> $GITHUB_STEP_SUMMARY
+
+      - name: ⚠️ Tag Already Exists
+        if: steps.tag-check.outputs.exists == 'true'
+        run: |
+          echo "## ⚠️ Tag Already Exists" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Tag \`${{ steps.version.outputs.VERSION }}\` already exists." >> $GITHUB_STEP_SUMMARY
+          echo "No new tag was created." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "💡 **Tip**: Include a version number in your PR title or commit message to create a new tag." >> $GITHUB_STEP_SUMMARY 
