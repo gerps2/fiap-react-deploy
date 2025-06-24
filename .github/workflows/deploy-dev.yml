@@ -11,8 +11,7 @@ on:
 env:
   NODE_VERSION: '22'
   ENVIRONMENT: 'dev'
-  # Registry configuration - usando o mesmo registry para dev e prod
-  REGISTRY_URL: 'registry.gerson-prudencio.com.br'
+  REGISTRY_URL: 'registry-prod.gerson-prudencio.com.br'
   IMAGE_NAME: 'fiap-react-deploy'
 
 jobs:
