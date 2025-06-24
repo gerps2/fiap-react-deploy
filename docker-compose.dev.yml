@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  app:
+  fiap-react-dev:
     build:
       context: .
       dockerfile: Dockerfile
